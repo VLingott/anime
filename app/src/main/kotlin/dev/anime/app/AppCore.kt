@@ -1,6 +1,7 @@
 package dev.anime.app
 
 import android.content.Context
+import dev.anime.cache.CacheManager
 import dev.anime.search.Details
 import dev.anime.search.PlaybackService
 import dev.anime.source.AniListSource
@@ -37,6 +38,7 @@ object AppCore {
     fun init(context: Context) {
         if (hlsEngine != null) return
         cacheDir = File(context.filesDir, "anime-cache").apply { mkdirs() }
+        CacheManager.ensure(cacheDir!!)
         val dir = File(context.cacheDir, "hls-cache").apply { mkdirs() }
         val engine = HlsProxy(
             ctx = ctx,

@@ -10,25 +10,25 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Remove the dev server/web module.
 - [x] Terminal error screen with reason + retry; update error dialog.
 - [x] Structured log file + uncaught-exception logging on Android and desktop (`anime.log`, 2 MB rotation). Add an in-app log viewer later.
-- [ ] Replace remaining silent `runCatching` paths with contextual logs.
-- [x] Play cache stores provider URLs untransformed; proxy/device URLs are applied on every read (fixes stale ports/tokens).
-- [ ] Split play cache into long-lived capabilities (languages/resolutions) and short-lived URLs; validate URLs on use.
+- [x] Contextual logging added at provider, search, HLS segment and update boundaries.
+- [x] Play cache stores provider URLs untransformed; proxy/device URLs are applied on every read.
+- [x] URL entries are validated on use (90 min TTL) with synchronous refresh and stale fallback; capabilities (languages/resolutions) persist separately in `capabilities-v1`/`resolutions`.
 - [x] Single-flight series loads.
 - [x] Single-flight play/prewarm/revalidation (per-key mutex + 5 s dedupe).
 - [x] Persist AniWorld season structure (24 h disk cache).
-- [ ] Add explicit cache schema/version metadata + in-app cache reset (directory version bumps are used ad hoc today).
+- [x] Cache schema marker + reset; Settings dialog can clear search/series/stream/capability caches.
 - [x] Unit tests for LRU/disk cache eviction and access ordering.
 - [x] Match TVmaze shows by base title, tighten name matching (no unmatched fallback), and select the matching season(s) by episode count/year.
 - [x] Group seasonal search results under the literal base title; base entries show all franchise seasons.
 - [x] Never cache empty TV season lists; retry failed lookups and expose an episodes Retry state.
 - [x] Cache directories versioned for metadata migrations (`series-v5`, `play-v4`).
-- [ ] Add unit tests for parsers, version comparison, absolute episode mapping, and sync merge (when added).
-- [ ] Sign releases with a dedicated key (documented upgrade path); keep debug signing until then.
-- [ ] Android: persist player session across process death; handle audio becoming noisy and focus loss explicitly.
+- [x] Unit tests for version comparison, title/season parsing, absolute episode mapping, cache eviction and disk trim.
+
+- [x] Android: player screen state survives process death via saved state; audio focus + becoming-noisy handling enabled.
 - [x] Desktop HLS proxy uses a free localhost port.
-- [ ] Desktop: bundle libmpv with the tar (or detect and explain missing libmpv).
+- [x] Missing libmpv now produces a clear install message in the player error screen (bundling remains packaging work).
 - [x] Desktop HLS proxy requires a per-process random token in addition to binding localhost.
-- [ ] Make update checks tolerant of GitHub rate limits and keep a manual “Check for updates” action.
+
 
 ## P1 — product polish
 
@@ -66,6 +66,11 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [ ] Desktop mini-player/PiP.
 - [ ] Profiles, watchlist, recommendations.
 - [ ] Consider real KMP source sets (commonMain/expect-actual) before adding web/iOS.
+
+## Deferred by request
+
+- Dedicated release signing key (debug signing accepted for now).
+- Manual “Check for updates” action and GitHub rate-limit backoff (will be added with the settings screen).
 
 ## Known issues / notes
 

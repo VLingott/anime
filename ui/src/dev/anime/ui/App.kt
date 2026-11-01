@@ -65,6 +65,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -118,6 +120,8 @@ import dev.anime.search.Details
 import dev.anime.search.PlaybackService
 import dev.anime.search.SeriesRepository
 import dev.anime.store.RecentSeries
+import dev.anime.util.AppLog
+import dev.anime.util.absoluteEpisodeIndex
 import dev.anime.store.RecentsStore
 import dev.anime.source.AniListFilter
 import dev.anime.source.AniListSource
@@ -228,21 +232,6 @@ object NoopUpdateChecker : UpdateChecker {
     override fun dismiss() = Unit
 }
 
-fun isNewerVersion(current: String, latest: String): Boolean {
-    fun parts(value: String) = value.removePrefix("v")
-        .split('.', '-', '+', '_')
-        .mapNotNull { it.toIntOrNull() }
-    val a = parts(current)
-    val b = parts(latest)
-    val size = maxOf(a.size, b.size)
-    for (i in 0 until size) {
-        val x = a.getOrElse(i) { 0 }
-        val y = b.getOrElse(i) { 0 }
-        if (x != y) return y > x
-    }
-    return false
-}
-
 interface BackHost {
     @Composable
     fun Back(onBack: () -> Unit)
@@ -284,6 +273,7 @@ data class Deps(
     val recents: RecentsStore? = null,
     val appVersion: String = "0.1",
     val updateChecker: UpdateChecker = NoopUpdateChecker,
+    val clearCache: () -> Unit = {},
 )
 
 data class SearchFilters(
@@ -310,6 +300,37 @@ private val Colors = darkColorScheme(
     surfaceVariant = Color(0xFF151515),
     onSurfaceVariant = Color(0xFFC9C9C3),
     outline = Color(0xFF232323),
+)
+
+private val PlayerArgsSaver = listSaver<PlayerArgs?, String>(
+    save = { args ->
+        if (args == null) emptyList()
+        else listOf(
+            args.id.toString(),
+            args.season.toString(),
+            args.episode.toString(),
+            args.label,
+            args.title,
+            args.cover.orEmpty(),
+            args.score?.toString().orEmpty(),
+            args.episodeTitle.orEmpty(),
+            args.absoluteEpisode?.toString().orEmpty(),
+        )
+    },
+    restore = { values ->
+        if (values.size < 9) null
+        else PlayerArgs(
+            id = values[0].toLongOrNull() ?: return@listSaver null,
+            season = values[1].toIntOrNull() ?: 1,
+            episode = values[2].toIntOrNull() ?: 1,
+            label = values[3],
+            title = values[4],
+            cover = values[5].ifBlank { null },
+            score = values[6].toDoubleOrNull(),
+            episodeTitle = values[7].ifBlank { null },
+            absoluteEpisode = values[8].toIntOrNull(),
+        )
+    },
 )
 
 private data class PlayerArgs(
@@ -424,10 +445,10 @@ fun App(deps: Deps) {
     LaunchedEffect(Unit) { deps.updateChecker.checkForUpdates() }
     val updateState by deps.updateChecker.state.collectAsState()
     var filters by remember { mutableStateOf(SearchFilters()) }
-    var selected by remember { mutableStateOf<Long?>(null) }
-    var player by remember { mutableStateOf<PlayerArgs?>(null) }
+    var selected by rememberSaveable { mutableStateOf<Long?>(null) }
+    var player by rememberSaveable(stateSaver = PlayerArgsSaver) { mutableStateOf<PlayerArgs?>(null) }
     var refreshTick by remember { mutableIntStateOf(0) }
-    var searchMode by remember { mutableStateOf(false) }
+    var searchMode by rememberSaveable { mutableStateOf(false) }
     var titleLanguage by remember { mutableStateOf(TitleLanguage.entries.getOrElse(deps.progress.titleLanguage()) { TitleLanguage.ROMAJI }) }
 
     if (updateState != null) {
@@ -532,6 +553,7 @@ private fun HomeScreen(
     val recents = remember(refreshTick, localTick) { deps.recents?.list().orEmpty() }
     var sort by remember { mutableStateOf(HomeSort.RECENT) }
     var pendingRemoval by remember { mutableStateOf<RecentSeries?>(null) }
+    var showSettings by remember { mutableStateOf(false) }
 
     val items = remember(recents, sort, titleLanguage) {
         recents.map { recent ->
@@ -596,6 +618,8 @@ private fun HomeScreen(
             }
             Spacer(Modifier.width(8.dp))
             HomeSortButton(sort) { sort = it }
+            Spacer(Modifier.width(8.dp))
+            IconSquareButton(SquareIcon.Settings, active = false) { showSettings = true }
         }
 
         LazyColumn(
@@ -629,6 +653,50 @@ private fun HomeScreen(
                         onResume = onResume,
                         onLongPress = { pendingRemoval = entry.recent },
                     )
+                }
+            }
+        }
+    }
+
+    if (showSettings) {
+        Dialog(onDismissRequest = { showSettings = false }) {
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = Color(0xFF0C0C0C),
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+            ) {
+                Column(Modifier.padding(20.dp)) {
+                    Text("Settings", color = Color(0xFFF5F5F2), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Anime ${deps.appVersion}", color = Color(0xFF9B9B96), fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                    Text(
+                        "Clear cached data",
+                        color = Color(0xFFF5F5F2),
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(top = 18.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color(0xFF151515))
+                            .clickable {
+                                deps.clearCache()
+                                showSettings = false
+                            }
+                            .padding(horizontal = 16.dp, vertical = 9.dp),
+                    )
+                    Text(
+                        "Removes search, series, stream and image metadata caches. Progress is kept.",
+                        color = Color(0xFF9B9B96),
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    Row(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalArrangement = Arrangement.End) {
+                        Text(
+                            "Close",
+                            color = Color(0xFFF5F9F2),
+                            fontSize = 13.sp,
+                            modifier = Modifier.clickable { showSettings = false }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
                 }
             }
         }
@@ -857,7 +925,7 @@ private fun SearchScreen(
                 deps.core.ctx,
                 refresh = pageNumber == 1,
             )
-        }.getOrDefault(emptyList())
+        }.onFailure { AppLog.w("search", "Search request failed", it) }.getOrDefault(emptyList())
     }
 
     LaunchedEffect(filters) {
@@ -1010,7 +1078,7 @@ private fun SearchScreen(
     }
 }
 
-private enum class SquareIcon { Filter, Sort, Back, Close, Language }
+private enum class SquareIcon { Filter, Sort, Back, Close, Language, Settings }
 
 @Composable
 private fun IconSquareButton(
@@ -1070,6 +1138,24 @@ private fun IconSquareButton(
                 SquareIcon.Close -> {
                     drawLine(color, Offset(w * 0.24f, h * 0.24f), Offset(w * 0.76f, h * 0.76f), stroke, StrokeCap.Round)
                     drawLine(color, Offset(w * 0.76f, h * 0.24f), Offset(w * 0.24f, h * 0.76f), stroke, StrokeCap.Round)
+                }
+                SquareIcon.Settings -> {
+                    drawCircle(color, radius = w * 0.22f, center = Offset(w / 2f, h / 2f), style = Stroke(stroke))
+                    drawCircle(color, radius = w * 0.42f, center = Offset(w / 2f, h / 2f), style = Stroke(stroke))
+                    for (i in 0 until 8) {
+                        val angle = Math.toRadians(i * 45.0)
+                        val inner = w * 0.42f
+                        val outer = w * 0.5f
+                        val cx = w / 2f
+                        val cy = h / 2f
+                        drawLine(
+                            color,
+                            Offset(cx + (Math.cos(angle) * inner).toFloat(), cy + (Math.sin(angle) * inner).toFloat()),
+                            Offset(cx + (Math.cos(angle) * outer).toFloat(), cy + (Math.sin(angle) * outer).toFloat()),
+                            stroke,
+                            StrokeCap.Round,
+                        )
+                    }
                 }
                 SquareIcon.Language -> {
                     drawCircle(color, radius = w * 0.4f, center = Offset(w / 2f, h / 2f), style = Stroke(stroke))
@@ -1376,22 +1462,6 @@ private fun groupSearchHits(hits: List<SearchHit>): List<SearchHit> {
             ?: list.minByOrNull { it.year ?: 9_999 }
             ?: list.first()
     }
-}
-
-private fun absoluteEpisodeIndex(
-    seasons: List<Pair<Int, List<TvmazeEpisode>>>,
-    season: Int,
-    episode: Int,
-): Int? {
-    var index = 0
-    for ((seasonNumber, episodes) in seasons.sortedBy { it.first }) {
-        for (entry in episodes.sortedBy { it.number ?: 0 }) {
-            val number = entry.number ?: continue
-            index++
-            if (seasonNumber == season && number == episode) return index
-        }
-    }
-    return null
 }
 
 private fun displayTitle(d: DetailResult, language: TitleLanguage): String = when (language) {

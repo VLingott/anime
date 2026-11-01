@@ -67,7 +67,7 @@ internal interface LibMpv : Library {
                     failure = t
                 }
             }
-            throw IllegalStateException("libmpv not found", failure)
+            throw IllegalStateException("libmpv is not installed. Install libmpv to play video on Linux.", failure)
         }
     }
 }

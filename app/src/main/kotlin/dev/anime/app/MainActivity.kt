@@ -52,6 +52,7 @@ import dev.anime.ui.BackHost
 import dev.anime.ui.CoreHandles
 import dev.anime.ui.Deps
 import dev.anime.ui.ImageHost
+import dev.anime.cache.CacheManager
 import dev.anime.store.FileRecentsStore
 import dev.anime.util.AppLog
 import dev.anime.ui.PlayerAudioTrack
@@ -61,7 +62,7 @@ import dev.anime.ui.PlayerSession
 import dev.anime.ui.UpdateChecker
 import dev.anime.ui.UpdatePhase
 import dev.anime.ui.UpdateUiState
-import dev.anime.ui.isNewerVersion
+import dev.anime.util.isNewerVersion
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Dispatchers
@@ -137,6 +138,9 @@ private fun androidDeps(activity: MainActivity): Deps = Deps(
     recents = FileRecentsStore(java.io.File(activity.filesDir, "recents.json")),
     appVersion = BuildConfig.VERSION_NAME,
     updateChecker = AndroidUpdateChecker(activity, BuildConfig.VERSION_NAME),
+    clearCache = {
+        CacheManager.clear(java.io.File(activity.filesDir, "anime-cache"))
+    },
 )
 
 private object AndroidBackHost : BackHost {
@@ -213,6 +217,7 @@ internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
                         .build(),
                     true,
                 )
+                .setHandleAudioBecomingNoisy(true)
                 .build()
         }
         val session = remember(player) { AndroidSession(player) }

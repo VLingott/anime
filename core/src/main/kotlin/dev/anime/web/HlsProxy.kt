@@ -1,6 +1,7 @@
 package dev.anime.web
 
 import dev.anime.source.SourceContext
+import dev.anime.util.AppLog
 import dev.anime.source.play.FlixCloud
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -163,7 +164,9 @@ class HlsProxy(
 
         val bytes = try {
             fetch(url, file)
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            val host = runCatching { URI(url).host }.getOrNull() ?: "upstream"
+            AppLog.w("hls", "Segment fetch failed from $host", error)
             null
         } finally {
             inFlight.remove(file.name)

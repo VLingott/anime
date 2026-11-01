@@ -24,11 +24,27 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 private const val PLAY_CACHE_BYTES = 32L * 1024 * 1024
+private const val PLAY_URL_TTL = 90 * 60_000L
 
 @Serializable
 private data class CachedPlay(
     val savedAt: Long,
     val response: PlayResponse,
+)
+
+@Serializable
+data class SourceCapability(
+    val id: String,
+    val name: String,
+    val languages: List<String> = emptyList(),
+    val episodeTitleGerman: String? = null,
+    val episodeTitleEnglish: String? = null,
+)
+
+@Serializable
+private data class CachedCapabilities(
+    val savedAt: Long,
+    val sources: List<SourceCapability>,
 )
 
 class PlaybackService(
@@ -39,9 +55,10 @@ class PlaybackService(
     private val providers: List<PlaybackProvider> = listOf(AniWorldProvider(cacheDir), ReAnimeProvider()),
     val health: ProviderHealth = ProviderHealth(),
 ) {
-    private val hot = ConcurrentHashMap<String, PlayResponse>()
-    private val disk = cacheDir?.let { DiskCache(File(it, "play-v5"), PLAY_CACHE_BYTES) }
+    private val hot = ConcurrentHashMap<String, CachedPlay>()
+    private val disk = cacheDir?.let { DiskCache(File(it, "play-v6"), PLAY_CACHE_BYTES) }
     private val resolutionDisk = cacheDir?.let { DiskCache(File(it, "resolutions"), 8L * 1024 * 1024) }
+    private val capabilityDisk = cacheDir?.let { DiskCache(File(it, "capabilities-v1"), 8L * 1024 * 1024) }
     private val cacheJson = Json { ignoreUnknownKeys = true }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refreshing = ConcurrentHashMap.newKeySet<String>()
@@ -66,22 +83,32 @@ class PlaybackService(
         if (!forceRefresh) {
             val cached = hot[key] ?: readDisk(key)?.also { hot[key] = it }
             if (cached != null) {
-                refreshInBackground(key, animeId, season, episode, absoluteEpisode, episodeTitle)
-                return present(cached)
+                val age = System.currentTimeMillis() - cached.savedAt
+                if (age <= PLAY_URL_TTL) {
+                    refreshInBackground(key, animeId, season, episode, absoluteEpisode, episodeTitle)
+                    return present(cached.response)
+                }
+                val fresh = resolveLocked(key, animeId, season, episode, absoluteEpisode, episodeTitle)
+                return present(if (fresh.sources.isNotEmpty()) fresh else cached.response)
             }
         }
 
-        return locks.getOrPut(key) { Mutex() }.withLock {
-            if (!forceRefresh) {
-                val cached = hot[key] ?: readDisk(key)?.also { hot[key] = it }
-                if (cached != null) return@withLock present(cached)
-            } else if (System.currentTimeMillis() - (lastResolvedAt[key] ?: 0L) < 5_000) {
-                val recent = hot[key] ?: readDisk(key)?.also { hot[key] = it }
-                if (recent != null) return@withLock present(recent)
-            }
-            val resolved = resolveAndStore(key, animeId, season, episode, absoluteEpisode, episodeTitle)
+        return present(resolveLocked(key, animeId, season, episode, absoluteEpisode, episodeTitle))
+    }
+
+    private suspend fun resolveLocked(
+        key: String,
+        animeId: Long,
+        season: Int,
+        episode: Int,
+        absoluteEpisode: Int?,
+        episodeTitle: String?,
+    ): PlayResponse = locks.getOrPut(key) { Mutex() }.withLock {
+        if (System.currentTimeMillis() - (lastResolvedAt[key] ?: 0L) < 5_000) {
+            (hot[key] ?: readDisk(key))?.let { return@withLock it.response }
+        }
+        resolveAndStore(key, animeId, season, episode, absoluteEpisode, episodeTitle).also { resolved ->
             if (resolved.sources.isNotEmpty()) lastResolvedAt[key] = System.currentTimeMillis()
-            present(resolved)
         }
     }
 
@@ -161,11 +188,35 @@ class PlaybackService(
             episode = episode,
             sources = merged,
         )
-        hot[key] = response
+        val cached = CachedPlay(System.currentTimeMillis(), response)
+        hot[key] = cached
         runCatching {
-            disk?.write(key, cacheJson.encodeToString(CachedPlay(System.currentTimeMillis(), response)))
+            disk?.write(key, cacheJson.encodeToString(cached))
+            capabilityDisk?.write(
+                key,
+                cacheJson.encodeToString(
+                    CachedCapabilities(
+                        System.currentTimeMillis(),
+                        response.sources.map { source ->
+                            SourceCapability(
+                                id = source.id,
+                                name = source.name,
+                                languages = source.languages,
+                                episodeTitleGerman = source.episodeTitleGerman,
+                                episodeTitleEnglish = source.episodeTitleEnglish,
+                            )
+                        },
+                    ),
+                ),
+            )
         }
         return response
+    }
+
+    fun cachedCapabilities(id: String, season: Int, episode: Int): List<SourceCapability> {
+        val key = "$id|${season.coerceAtLeast(1)}|$episode"
+        val text = capabilityDisk?.read(key) ?: return emptyList()
+        return runCatching { cacheJson.decodeFromString<CachedCapabilities>(text).sources }.getOrDefault(emptyList())
     }
 
     fun cachedResolutions(url: String): List<StreamResolution> {
@@ -187,9 +238,9 @@ class PlaybackService(
         )
     }
 
-    private fun readDisk(key: String): PlayResponse? {
+    private fun readDisk(key: String): CachedPlay? {
         val text = disk?.read(key) ?: return null
-        return runCatching { cacheJson.decodeFromString<CachedPlay>(text).response }.getOrNull()
+        return runCatching { cacheJson.decodeFromString<CachedPlay>(text) }.getOrNull()
     }
 
     /** Resolves a real episode per provider (not just a homepage probe) and records the outcome. */

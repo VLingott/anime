@@ -7,6 +7,7 @@ import dev.anime.model.DetailResult
 import dev.anime.source.SourceContext
 import dev.anime.source.TvmazeEpisode
 import dev.anime.source.TvmazeEpisodesSource
+import dev.anime.util.hasSeasonMarker
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -94,11 +95,9 @@ class SeriesRepository(
         if (grouped.all { it.first >= 1900 }) return grouped
 
         val rawTitle = detail.title?.romaji ?: detail.title?.english ?: detail.title?.native
-        val hasSeasonMarker = rawTitle != null && Regex(
-            "(?i)(\\b(\\d+(st|nd|rd|th)\\s+season|season\\s+\\d+|part\\s+\\d+|cour\\s+\\d+)\\b|\\s(ii|iii|iv|v|vi|vii|viii|ix|x)$)",
-        ).containsMatchIn(rawTitle)
+        val marked = rawTitle != null && hasSeasonMarker(rawTitle)
         val format = detail.format?.uppercase()
-        if (!hasSeasonMarker && (format == "TV" || format == "TV_SHORT")) {
+        if (!marked && (format == "TV" || format == "TV_SHORT")) {
             return grouped
         }
 

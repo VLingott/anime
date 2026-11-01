@@ -26,6 +26,7 @@ import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.window.application
 import dev.anime.search.Details
+import dev.anime.cache.CacheManager
 import dev.anime.search.PlaybackService
 import dev.anime.store.FileRecentsStore
 import dev.anime.util.AppLog
@@ -41,7 +42,7 @@ import dev.anime.ui.PlayerHost
 import dev.anime.ui.PlayerResolution
 import dev.anime.ui.PlayerSession
 import dev.anime.ui.UpdateChecker
-import dev.anime.ui.isNewerVersion
+import dev.anime.util.isNewerVersion
 import dev.anime.web.HlsProxy
 import fi.iki.elonen.NanoHTTPD
 import kotlinx.coroutines.Dispatchers
@@ -361,6 +362,7 @@ private class DesktopUpdateChecker(private val currentVersion: String) : UpdateC
                 }
                 stateFlow.value = dev.anime.ui.UpdateUiState(version, dev.anime.ui.UpdatePhase.READY)
             }.onFailure { error ->
+                AppLog.w("update", "Desktop update check failed", error)
                 stateFlow.value = dev.anime.ui.UpdateUiState(
                     version = "",
                     phase = dev.anime.ui.UpdatePhase.ERROR,
@@ -393,6 +395,7 @@ private class DesktopUpdateChecker(private val currentVersion: String) : UpdateC
 fun main() {
     val appVersion = System.getProperty("anime.version") ?: "1.0.0"
     AppLog.init(java.io.File(Core.cacheDir, "anime.log"))
+    CacheManager.ensure(Core.cacheDir)
     val previousCrashHandler = Thread.getDefaultUncaughtExceptionHandler()
     Thread.setDefaultUncaughtExceptionHandler { thread, error ->
         AppLog.e("crash", "Uncaught on ${thread.name}", error)
@@ -424,6 +427,7 @@ fun main() {
                     progress = DesktopProgress,
                     appVersion = appVersion,
                     updateChecker = DesktopUpdateChecker(appVersion),
+                    clearCache = { CacheManager.clear(Core.cacheDir) },
                     openUrl = { url -> runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(url)) } },
                     recents = FileRecentsStore(
                         java.io.File(
