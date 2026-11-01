@@ -52,7 +52,12 @@ class AniWorldProvider : PlaybackProvider {
         if (episode < 1) return emptyList()
         val slug = slugFor(detail, ctx) ?: return emptyList()
         val offset = titleSeason(detail) - 1
-        val pageSeasons = listOf((season + offset).coerceAtLeast(1), season.coerceAtLeast(1)).distinct()
+        val pageSeasons = linkedSetOf<Int>().apply {
+            add((season + offset).coerceAtLeast(1))
+            add(season.coerceAtLeast(1))
+            if (season > 50) add(1)
+            add(1)
+        }.toList()
 
         var byLanguage = LinkedHashMap<Int, MutableList<String>>()
         for (pageSeason in pageSeasons) {
