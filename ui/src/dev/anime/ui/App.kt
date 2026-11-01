@@ -1369,12 +1369,15 @@ private fun DetailScreen(
     var seasons by remember(id) { mutableStateOf(cached?.seasons.orEmpty()) }
     var loading by remember(id) { mutableStateOf(cached == null) }
     var showSkeleton by remember(id) { mutableStateOf(false) }
+    var refreshing by remember(id) { mutableStateOf(false) }
+    var refreshTickLocal by remember(id) { mutableIntStateOf(0) }
     var showDesc by remember(id) { mutableStateOf(false) }
 
     deps.back.Back { onBack() }
 
-    LaunchedEffect(id) {
+    LaunchedEffect(id, refreshTickLocal) {
         if (cached == null) loading = true
+        refreshing = true
         val skeletonTimer = launch {
             delay(350)
             if (loading) showSkeleton = true
@@ -1386,6 +1389,7 @@ private fun DetailScreen(
         detail = view?.detail
         seasons = view?.seasons.orEmpty()
         loading = false
+        refreshing = false
         showSkeleton = false
     }
 
@@ -1494,7 +1498,9 @@ private fun DetailScreen(
                                 Column(Modifier.weight(1f).heightIn(min = coverHeightOverride)) {
                                     val season = d.season?.lowercase()?.replaceFirstChar { it.uppercase() }
                                     val seasonText = listOfNotNull(season, d.seasonYear?.toString()).joinToString(" ")
-                                    val studioText = d.studios.firstOrNull()?.let { "STUDIO $it" }
+                                    val studioText = d.studios.firstOrNull()?.let {
+                                        if (it.startsWith("Studio", ignoreCase = true)) it else "STUDIO $it"
+                                    }
                                     val eyebrow = listOfNotNull(seasonText.ifBlank { null }, studioText).joinToString(" · ")
                                     if (eyebrow.isNotBlank()) {
                                         Text(
@@ -1581,6 +1587,30 @@ private fun DetailScreen(
                                                 }
                                             }
                                         }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (seasons.isEmpty() && d.format != "MOVIE") {
+                            item {
+                                Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        if (refreshing) "Loading episodes…" else "Episodes unavailable.",
+                                        color = Color(0xFF9B9B96),
+                                        fontSize = 13.sp,
+                                    )
+                                    if (!refreshing) {
+                                        Text(
+                                            "Retry",
+                                            color = Color(0xFFF5F5F2),
+                                            fontSize = 13.sp,
+                                            modifier = Modifier.padding(top = 12.dp)
+                                                .clip(RoundedCornerShape(999.dp))
+                                                .background(Color(0xFF151515))
+                                                .clickable { refreshTickLocal += 1 }
+                                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                        )
                                     }
                                 }
                             }

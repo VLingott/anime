@@ -31,7 +31,7 @@ class SeriesRepository(
     cacheDir: File? = null,
 ) {
     private val cache = ByteLruCache<Long, SeriesView>(32L * 1024 * 1024, ::weight)
-    private val disk = cacheDir?.let { DiskCache(File(it, "series-v3"), 32L * 1024 * 1024) }
+    private val disk = cacheDir?.let { DiskCache(File(it, "series-v4"), 32L * 1024 * 1024) }
     private val json = Json { ignoreUnknownKeys = true }
     private val locks = java.util.concurrent.ConcurrentHashMap<Long, Mutex>()
 
@@ -58,14 +58,18 @@ class SeriesRepository(
                         name.replace(Regex("(?i)\\b(\\d+(st|nd|rd|th)\\s+season|season\\s+\\d+|part\\s+\\d+|cour\\s+\\d+)\\b"), " ").trim(),
                     )
                 }.filter { it.length >= 2 }.distinctBy { it.lowercase() }
-                val show = tvmaze.findShow(searchNames, detail.seasonYear, ctx)
-                val grouped = if (show != null) {
-                    tvmaze.episodes(show.id, ctx)
-                        .filter { it.number != null }
-                        .groupBy { it.season }
-                        .toSortedMap()
-                        .map { (season, list) -> season to list.sortedBy { it.number } }
-                } else emptyList()
+                var show = tvmaze.findShow(searchNames, detail.seasonYear, ctx)
+                var raw = if (show != null) tvmaze.episodes(show.id, ctx) else emptyList()
+                if (raw.isEmpty()) {
+                    kotlinx.coroutines.delay(350)
+                    show = tvmaze.findShow(searchNames, detail.seasonYear, ctx)
+                    raw = if (show != null) tvmaze.episodes(show.id, ctx) else emptyList()
+                }
+                val grouped = raw
+                    .filter { it.number != null }
+                    .groupBy { it.season }
+                    .toSortedMap()
+                    .map { (season, list) -> season to list.sortedBy { it.number } }
                 selectSeasons(detail, grouped).ifEmpty {
                     val count = detail.episodes ?: 0
                     if (count > 0) listOf(1 to (1..count).map { n -> TvmazeEpisode(season = 1, number = n) }) else emptyList()
@@ -73,8 +77,10 @@ class SeriesRepository(
             } else emptyList()
 
             val view = SeriesView(detail, seasons)
-            cache.put(id, view)
-            disk?.write(id.toString(), json.encodeToString(CachedSeries(detail, seasons)))
+            if (seasons.isNotEmpty() || detail.format == "MOVIE") {
+                cache.put(id, view)
+                disk?.write(id.toString(), json.encodeToString(CachedSeries(detail, seasons)))
+            }
             view
         }
     }
