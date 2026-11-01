@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<title>Anime Search</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <form id="searchForm" class="search-bar" role="search">
+      <label class="sr-only" for="q">Search anime</label>
+      <input id="q" name="q" type="search" placeholder="Search anime…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" autofocus>
+    </form>
+  </div>
+</header>
+
+<main>
+  <div id="results" class="results"></div>
+</main>
+
+<section id="detail" class="detail" hidden></section>
+
+<script src="/static/app.js" defer></script>
+</body>
+</html>
