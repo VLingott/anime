@@ -122,6 +122,7 @@ import dev.anime.search.SeriesRepository
 import dev.anime.store.RecentSeries
 import dev.anime.util.AppLog
 import dev.anime.util.absoluteEpisodeIndex
+import dev.anime.util.cycleFilter
 import dev.anime.store.RecentsStore
 import dev.anime.source.AniListFilter
 import dev.anime.source.AniListSource
@@ -282,8 +283,9 @@ data class Deps(
 data class SearchFilters(
     val query: String = "",
     val genres: Set<String> = emptySet(),
+    val excludedGenres: Set<String> = emptySet(),
     val tags: Set<String> = emptySet(),
-    val tagsText: String = "",
+    val excludedTags: Set<String> = emptySet(),
     val minScore: Int = 0,
     val formats: Set<String> = emptySet(),
     val statuses: Set<String> = emptySet(),
@@ -489,7 +491,7 @@ fun App(deps: Deps) {
                         searchMode = true
                     },
                     onTag = { tag ->
-                        filters = SearchFilters(tags = setOf(tag), tagsText = tag)
+                        filters = SearchFilters(tags = setOf(tag))
                         selected = null
                         searchMode = true
                     },
@@ -912,7 +914,9 @@ private fun SearchScreen(
     fun filterFor(pageNumber: Int) = AniListFilter(
         search = filters.query.trim(),
         genres = filters.genres,
-        tags = filters.tagsText.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet(),
+        excludedGenres = filters.excludedGenres,
+        tags = filters.tags,
+        excludedTags = filters.excludedTags,
         minScore = filters.minScore.takeIf { it > 0 },
         formats = filters.formats,
         statuses = filters.statuses,
@@ -933,10 +937,17 @@ private fun SearchScreen(
     var error by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
 
-    val tagList = remember(filters.tagsText) {
-        filters.tagsText.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    val tagOptions = remember(hits, filters.tags, filters.excludedTags) {
+        val counts = hits.flatMap { it.tags }.groupingBy { it }.eachCount()
+        val popular = counts.entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .map { it.key }
+        (filters.tags.sorted() + filters.excludedTags.sorted() + popular)
+            .distinct()
+            .take(48)
     }
-    val hasFilters = filters.genres.isNotEmpty() || tagList.isNotEmpty() || filters.minScore > 0 ||
+    val hasFilters = filters.genres.isNotEmpty() || filters.excludedGenres.isNotEmpty() ||
+        filters.tags.isNotEmpty() || filters.excludedTags.isNotEmpty() || filters.minScore > 0 ||
         filters.formats.isNotEmpty() || filters.statuses.isNotEmpty() || filters.season != null || filters.seasonYear.isNotBlank()
 
     suspend fun fetch(pageNumber: Int): List<SearchHit> = withContext(Dispatchers.IO) {
@@ -976,8 +987,7 @@ private fun SearchScreen(
         }
     }
 
-    val visibleHits = remember(hits) { groupSearchHits(hits) }
-    val shownCount by rememberUpdatedState(visibleHits.size)
+    val shownCount by rememberUpdatedState(hits.size)
 
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
@@ -1034,11 +1044,13 @@ private fun SearchScreen(
         }
 
         if (filters.showFilters) {
-            FilterPanel(filters, tagList, onFilters)
+            FilterPanel(filters, tagOptions, onFilters)
         } else if (hasFilters) {
             val summary = buildList {
-                addAll(filters.genres)
-                addAll(tagList)
+                filters.genres.forEach { add(it) }
+                filters.excludedGenres.forEach { add("-$it") }
+                filters.tags.forEach { add(it) }
+                filters.excludedTags.forEach { add("-$it") }
                 filters.formats.forEach { add(it.replace('_', ' ')) }
                 filters.statuses.forEach { add(it.replace('_', ' ')) }
                 filters.season?.let { add(it.lowercase().replaceFirstChar { c -> c.uppercase() }) }
@@ -1088,7 +1100,7 @@ private fun SearchScreen(
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(visibleHits, key = { it.externalId ?: it.url }) { hit ->
+            items(hits, key = { it.externalId ?: it.url }) { hit ->
                 SearchRow(deps, hit, titleLanguage) { hit.externalId?.toLongOrNull()?.let(onOpen) }
             }
             if (loadingMore) {
@@ -1216,44 +1228,52 @@ private fun SortIconButton(filters: SearchFilters, onFilters: (SearchFilters) ->
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FilterPanel(filters: SearchFilters, tagList: Set<String>, onFilters: (SearchFilters) -> Unit) {
+private fun FilterPanel(filters: SearchFilters, tagOptions: List<String>, onFilters: (SearchFilters) -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
+            .heightIn(max = 360.dp)
             .padding(horizontal = 14.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(Color(0xFF0C0C0C))
+            .verticalScroll(rememberScrollState())
             .padding(12.dp),
     ) {
         Label("GENRES")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             AniListSource.GENRES.forEach { genre ->
-                Chip(genre, genre in filters.genres) {
-                    val next = if (genre in filters.genres) filters.genres - genre else filters.genres + genre
-                    onFilters(filters.copy(genres = next))
+                Chip(
+                    genre,
+                    selected = genre in filters.genres,
+                    excluded = genre in filters.excludedGenres,
+                ) {
+                    val (included, excluded) = cycleFilter(filters.genres, filters.excludedGenres, genre)
+                    onFilters(filters.copy(genres = included, excludedGenres = excluded))
                 }
             }
         }
 
-        Label("TAGS (comma separated)")
-        OutlinedTextField(
-            value = filters.tagsText,
-            onValueChange = { onFilters(filters.copy(tagsText = it)) },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            placeholder = { Text("e.g. Time Skip, Isekai", color = Color(0xFF6F6F6F), fontSize = 12.sp) },
-            textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFFF5F5F2), fontSize = 13.sp),
-            shape = RoundedCornerShape(10.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color(0xFF6F6F6F),
-                unfocusedBorderColor = Color(0xFF232323),
-                focusedContainerColor = Color(0xFF151515),
-                unfocusedContainerColor = Color(0xFF151515),
-                cursorColor = Color(0xFFF5F5F2),
-            ),
-        )
-        if (tagList.isNotEmpty()) {
-            Text(tagList.joinToString(" · "), color = Color(0xFF9B9B96), fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+        Label("TAGS")
+        if (tagOptions.isEmpty()) {
+            Text(
+                "Tags from the current results will appear here.",
+                color = Color(0xFF9B9B96),
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(tagOptions, key = { it }) { tag ->
+                    Chip(
+                        tag,
+                        selected = tag in filters.tags,
+                        excluded = tag in filters.excludedTags,
+                    ) {
+                        val (included, excluded) = cycleFilter(filters.tags, filters.excludedTags, tag)
+                        onFilters(filters.copy(tags = included, excludedTags = excluded))
+                    }
+                }
+            }
         }
 
         Label("MINIMUM SCORE: ${filters.minScore}")
@@ -1360,15 +1380,27 @@ private fun SortSelector(filters: SearchFilters, onFilters: (SearchFilters) -> U
 }
 
 @Composable
-private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
+private fun Chip(text: String, selected: Boolean, excluded: Boolean = false, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(999.dp)
     Text(
         text,
-        color = if (selected) Color.Black else Color(0xFFC9C9C3),
+        color = when {
+            excluded -> Color(0xFFFF7070)
+            selected -> Color.Black
+            else -> Color(0xFFC9C9C3)
+        },
         fontSize = 11.sp,
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(if (selected) Color(0xFFF5F5F2) else Color(0xFF1A1A1A))
+            .clip(shape)
+            .background(
+                when {
+                    excluded -> Color(0xFF3A1212)
+                    selected -> Color(0xFFF5F5F2)
+                    else -> Color(0xFF1A1A1A)
+                },
+            )
+            .then(if (excluded) Modifier.border(1.dp, Color(0xFF9E3A3A), shape) else Modifier)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 5.dp),
     )
@@ -1440,50 +1472,6 @@ private fun SearchRow(deps: Deps, hit: SearchHit, titleLanguage: TitleLanguage, 
                 )
             }
         }
-    }
-}
-
-private val seasonSuffix = Regex(
-    "(?i)\\s*(:?\\s*)(\\d+(st|nd|rd|th)\\s+season|season\\s+\\d+|part\\s+\\d+|cour\\s+\\d+|ii|iii|iv|v|vi|vii|viii|ix|x)$",
-)
-
-private fun normalizeTitle(value: String): String =
-    value.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()
-
-private fun groupSearchHits(hits: List<SearchHit>): List<SearchHit> {
-    val tvTitles = hits.filter { it.format == "TV" || it.format == "TV_SHORT" }
-        .map { normalizeTitle(it.title) }
-        .toSet()
-    val grouped = LinkedHashMap<String, MutableList<SearchHit>>()
-    val order = ArrayList<String>()
-    for (hit in hits) {
-        val isTv = hit.format == "TV" || hit.format == "TV_SHORT"
-        val normalized = normalizeTitle(hit.title)
-        var key = normalized
-        if (isTv) {
-            var stripped = hit.title
-            while (true) {
-                val next = stripped.replace(seasonSuffix, "").trim()
-                if (next == stripped) break
-                stripped = next
-            }
-            val base = normalizeTitle(stripped)
-            if (base != normalized && base in tvTitles) {
-                key = base
-            } else if (hit.title.contains(':')) {
-                val prefix = normalizeTitle(hit.title.substringBefore(':'))
-                if (prefix in tvTitles) key = prefix
-            }
-        }
-        if (key !in grouped) order += key
-        grouped.getOrPut(key) { mutableListOf() }.add(hit)
-    }
-    return order.map { key ->
-        val list = grouped.getValue(key)
-        list.firstOrNull { it.title.trim().lowercase() == key }
-            ?: list.minByOrNull { it.title.trim().length }
-            ?: list.minByOrNull { it.year ?: 9_999 }
-            ?: list.first()
     }
 }
 

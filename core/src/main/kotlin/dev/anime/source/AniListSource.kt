@@ -20,7 +20,9 @@ import kotlinx.serialization.json.put
 data class AniListFilter(
     val search: String = "",
     val genres: Set<String> = emptySet(),
+    val excludedGenres: Set<String> = emptySet(),
     val tags: Set<String> = emptySet(),
+    val excludedTags: Set<String> = emptySet(),
     val minScore: Int? = null,
     val formats: Set<String> = emptySet(),
     val statuses: Set<String> = emptySet(),
@@ -51,11 +53,13 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
     override val kind = "metadata"
 
     private val gql = """
-        query (${'$'}search: String, ${'$'}genres: [String], ${'$'}tags: [String], ${'$'}minScore: Int,
+        query (${'$'}search: String, ${'$'}genres: [String], ${'$'}excludedGenres: [String],
+               ${'$'}tags: [String], ${'$'}excludedTags: [String], ${'$'}minScore: Int,
                ${'$'}formats: [MediaFormat], ${'$'}statuses: [MediaStatus], ${'$'}season: MediaSeason,
                ${'$'}seasonYear: Int, ${'$'}sort: [MediaSort], ${'$'}page: Int, ${'$'}perPage: Int) {
           Page(page: ${'$'}page, perPage: ${'$'}perPage) {
-            media(search: ${'$'}search, type: ANIME, genre_in: ${'$'}genres, tag_in: ${'$'}tags,
+            media(search: ${'$'}search, type: ANIME, genre_in: ${'$'}genres, genre_not_in: ${'$'}excludedGenres,
+                  tag_in: ${'$'}tags, tag_not_in: ${'$'}excludedTags,
                   averageScore_greater: ${'$'}minScore, format_in: ${'$'}formats, status_in: ${'$'}statuses,
                   season: ${'$'}season, seasonYear: ${'$'}seasonYear, sort: ${'$'}sort, isAdult: false) {
               id
@@ -97,7 +101,13 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
         val variables = buildJsonObject {
             if (filter.search.isNotBlank()) put("search", filter.search)
             if (filter.genres.isNotEmpty()) put("genres", buildJsonArray { filter.genres.forEach { add(it) } })
+            if (filter.excludedGenres.isNotEmpty()) {
+                put("excludedGenres", buildJsonArray { filter.excludedGenres.forEach { add(it) } })
+            }
             if (filter.tags.isNotEmpty()) put("tags", buildJsonArray { filter.tags.forEach { add(it) } })
+            if (filter.excludedTags.isNotEmpty()) {
+                put("excludedTags", buildJsonArray { filter.excludedTags.forEach { add(it) } })
+            }
             filter.minScore?.let { put("minScore", it) }
             if (filter.formats.isNotEmpty()) put("formats", buildJsonArray { filter.formats.forEach { add(it) } })
             if (filter.statuses.isNotEmpty()) put("statuses", buildJsonArray { filter.statuses.forEach { add(it) } })
@@ -181,7 +191,9 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
     private fun filterKey(filter: AniListFilter): String = buildString {
         append(filter.search.trim().lowercase())
         append('|').append(filter.genres.sorted().joinToString(","))
+        append('|').append(filter.excludedGenres.sorted().joinToString(","))
         append('|').append(filter.tags.sorted().joinToString(","))
+        append('|').append(filter.excludedTags.sorted().joinToString(","))
         append('|').append(filter.minScore ?: -1)
         append('|').append(filter.formats.sorted().joinToString(","))
         append('|').append(filter.statuses.sorted().joinToString(","))

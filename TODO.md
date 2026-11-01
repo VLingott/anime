@@ -21,7 +21,7 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Cache schema marker + reset; Settings dialog can clear search/series/stream/capability caches.
 - [x] Unit tests for LRU/disk cache eviction and access ordering.
 - [x] Match TVmaze shows by base title, tighten name matching (no unmatched fallback), and select the matching season(s) by episode count/year.
-- [x] Group seasonal search results under the literal base title; base entries show all franchise seasons.
+- [x] Search shows each AniList entry independently; the old season-combination grouping was removed because it broke pagination.
 - [x] Never cache empty TV season lists; retry failed lookups and expose an episodes Retry state.
 - [x] Cache directories versioned for metadata migrations (`series-v5`, `play-v6`).
 - [x] Unit tests for version comparison, title/season parsing, absolute episode mapping, cache eviction and disk trim.
