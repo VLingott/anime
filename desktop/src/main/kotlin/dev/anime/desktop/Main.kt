@@ -223,7 +223,6 @@ private class DesktopPlayerHost(
             onDispose {
                 engine?.close()
                 engine = null
-                currentSession(null)
             }
         }
 

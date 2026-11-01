@@ -198,7 +198,6 @@ private class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
             onDispose {
                 view.keepScreenOn = false
                 if (player.duration > 0) currentOnProgress(player.currentPosition, player.duration)
-                currentOnSession(null)
                 player.removeListener(listener)
                 mediaSession.release()
                 player.release()

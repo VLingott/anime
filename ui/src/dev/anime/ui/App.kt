@@ -1764,7 +1764,6 @@ private fun PlayerOverlay(
     var failed by remember(args) { mutableStateOf(false) }
     var resumeFrom by remember(args) { mutableStateOf(deps.progress.resumeMs(args.id, args.season, args.episode)) }
     var session by remember(args) { mutableStateOf<PlayerSession?>(null) }
-    var sessionTag by remember(args) { mutableIntStateOf(-1) }
     var controlsVisible by remember(args) { mutableStateOf(true) }
     var poke by remember(args) { mutableIntStateOf(0) }
     var fullscreen by remember(args) { mutableStateOf(false) }
@@ -1850,7 +1849,6 @@ private fun PlayerOverlay(
         if (targetIndex >= 0 && targetIndex != index) {
             resumeFrom = current.positionMs
             index = targetIndex
-            session = null
         }
     }
 
@@ -1964,7 +1962,6 @@ private fun PlayerOverlay(
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                val sourceTag = index
                 deps.player.Video(
                     url = source.url,
                     resumeMs = resumeFrom,
@@ -1980,7 +1977,6 @@ private fun PlayerOverlay(
                         val preferred = deps.progress.audioPreference(args.id)
                         val currentLanguage = preferred
                             ?: active?.audioTracks?.firstOrNull { it.id == active.activeAudioId }?.label
-                        session = null
                         val candidates = ((index + 1) until sources.size).toList()
                         val next = candidates.firstOrNull { candidate ->
                             currentLanguage != null && sources[candidate].languages.any {
@@ -2005,11 +2001,7 @@ private fun PlayerOverlay(
                     onSession = { newSession ->
                         if (newSession != null) {
                             session = newSession
-                            sessionTag = sourceTag
                             if (status == "Switching language…" || status == "Switching source…") status = ""
-                        } else if (sessionTag == sourceTag) {
-                            session = null
-                            sessionTag = -1
                         }
                     },
                 )
@@ -2069,7 +2061,6 @@ private fun PlayerOverlay(
                                         kotlinx.coroutines.delay(160)
                                         resumeFrom = position
                                         index = option.sourceIndex
-                                        session = null
                                     }
                                 }
                             },
@@ -2086,7 +2077,6 @@ private fun PlayerOverlay(
                                         kotlinx.coroutines.delay(160)
                                         resumeFrom = position
                                         index = targetIndex
-                                        session = null
                                     }
                                 }
                             },
