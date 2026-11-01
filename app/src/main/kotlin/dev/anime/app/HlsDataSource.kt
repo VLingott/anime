@@ -56,8 +56,8 @@ private class HlsDataSource(private val engine: HlsProxy) : BaseDataSource(false
             }
         }
         val position = dataSpec.position.coerceAtLeast(0L)
-        skipFully(stream!!, position)
-        val afterSkip = (available - position).coerceAtLeast(0L)
+        val skipped = skipFully(stream!!, position)
+        val afterSkip = (available - skipped).coerceAtLeast(0L)
         remaining = if (dataSpec.length >= 0L) minOf(afterSkip, dataSpec.length) else afterSkip
         opened = true
         transferStarted(dataSpec)
@@ -76,7 +76,7 @@ private class HlsDataSource(private val engine: HlsProxy) : BaseDataSource(false
         return count
     }
 
-    private fun skipFully(input: InputStream, count: Long) {
+    private fun skipFully(input: InputStream, count: Long): Long {
         var left = count
         while (left > 0) {
             val skipped = input.skip(left)
@@ -89,6 +89,7 @@ private class HlsDataSource(private val engine: HlsProxy) : BaseDataSource(false
             if (read <= 0) break
             left -= read
         }
+        return count - left
     }
 
     override fun getUri(): Uri? = currentUri
