@@ -126,6 +126,7 @@ import dev.anime.util.cycleFilter
 import dev.anime.store.RecentsStore
 import dev.anime.source.AniListFilter
 import dev.anime.source.AniListSource
+import dev.anime.source.AniListTag
 import dev.anime.source.TvmazeEpisode
 import dev.anime.source.TvmazeEpisodesSource
 import kotlinx.coroutines.Dispatchers
@@ -268,6 +269,8 @@ interface ProgressStore {
     fun saveTitleLanguage(value: Int) {}
     fun defaultAudioLanguage(): String = "Japanese"
     fun saveDefaultAudioLanguage(value: String) {}
+    fun hideAdultContent(): Boolean = true
+    fun saveHideAdultContent(value: Boolean) {}
     fun removeSeries(id: Long) {}
 }
 
@@ -460,6 +463,7 @@ fun App(deps: Deps) {
     var refreshTick by remember { mutableIntStateOf(0) }
     var searchMode by rememberSaveable { mutableStateOf(false) }
     var titleLanguage by remember { mutableStateOf(TitleLanguage.entries.getOrElse(deps.progress.titleLanguage()) { TitleLanguage.ROMAJI }) }
+    var hideAdult by remember { mutableStateOf(deps.progress.hideAdultContent()) }
 
     if (updateState != null) {
         UpdateDialog(
@@ -505,6 +509,7 @@ fun App(deps: Deps) {
                 SearchScreen(
                     deps = deps,
                     filters = filters,
+                    includeAdult = !hideAdult,
                     titleLanguage = titleLanguage,
                     onFilters = { filters = it },
                     onOpen = { selected = it },
@@ -518,6 +523,11 @@ fun App(deps: Deps) {
                     onSetTitleLanguage = { next ->
                         titleLanguage = next
                         deps.progress.saveTitleLanguage(next.ordinal)
+                    },
+                    hideAdult = hideAdult,
+                    onSetHideAdult = { value ->
+                        hideAdult = value
+                        deps.progress.saveHideAdultContent(value)
                     },
                     onSearch = { searchMode = true },
                     onResume = { recent ->
@@ -566,6 +576,8 @@ private fun HomeScreen(
     refreshTick: Int,
     titleLanguage: TitleLanguage,
     onSetTitleLanguage: (TitleLanguage) -> Unit,
+    hideAdult: Boolean,
+    onSetHideAdult: (Boolean) -> Unit,
     onSearch: () -> Unit,
     onResume: (RecentSeries) -> Unit,
 ) {
@@ -732,6 +744,15 @@ private fun HomeScreen(
                             }
                         }
                     }
+                    Label("ADULT CONTENT")
+                    Chip("Hide adult content", selected = hideAdult) { onSetHideAdult(!hideAdult) }
+                    Text(
+                        "Hides adult search results and tag chips.",
+                        color = Color(0xFF9B9B96),
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
                     Text(
                         "Clear cached data",
                         color = Color(0xFFF5F5F2),
@@ -951,6 +972,7 @@ private fun RecentRow(
 private fun SearchScreen(
     deps: Deps,
     filters: SearchFilters,
+    includeAdult: Boolean,
     titleLanguage: TitleLanguage,
     onFilters: (SearchFilters) -> Unit,
     onOpen: (Long) -> Unit,
@@ -961,6 +983,7 @@ private fun SearchScreen(
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     fun filterFor(pageNumber: Int) = AniListFilter(
         search = filters.query.trim(),
+        includeAdult = includeAdult,
         genres = filters.genres,
         excludedGenres = filters.excludedGenres,
         tags = filters.tags,
@@ -983,7 +1006,7 @@ private fun SearchScreen(
     var endReached by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf(1) }
     var error by remember { mutableStateOf<String?>(null) }
-    var tagCatalog by remember { mutableStateOf<List<String>>(emptyList()) }
+    var tagCatalog by remember { mutableStateOf<List<AniListTag>>(emptyList()) }
     var tagLoading by remember { mutableStateOf(false) }
     var tagQuery by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -1008,9 +1031,12 @@ private fun SearchScreen(
             .map { it.key }
         (filters.tags.sorted() + filters.excludedTags.sorted() + popular).distinct()
     }
-    val tagOptions = remember(tagCatalog, fallbackTags, tagQuery, filters.tags, filters.excludedTags) {
+    val tagOptions = remember(tagCatalog, fallbackTags, tagQuery, filters.tags, filters.excludedTags, includeAdult) {
         val selected = filters.tags + filters.excludedTags
-        val source = if (tagCatalog.isNotEmpty()) tagCatalog else fallbackTags
+        val catalog = tagCatalog
+            .filter { includeAdult || !it.adult }
+            .map { it.name }
+        val source = if (catalog.isNotEmpty()) catalog else fallbackTags
         val query = tagQuery.trim()
         (source + selected).distinct().filter { tag ->
             query.isEmpty() || tag in selected || tag.contains(query, ignoreCase = true)
@@ -1030,7 +1056,7 @@ private fun SearchScreen(
         }.onFailure { AppLog.w("search", "Search request failed", it) }.getOrDefault(emptyList())
     }
 
-    LaunchedEffect(filters) {
+    LaunchedEffect(filters, includeAdult) {
         loading = true
         showSkeleton = false
         loadingMore = false

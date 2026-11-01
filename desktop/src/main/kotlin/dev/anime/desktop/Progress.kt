@@ -31,6 +31,10 @@ object Progress {
 
     fun saveDefaultAudioLanguage(value: String) = prefs.put("ui:defaultAudio", value)
 
+    fun hideAdultContent(): Boolean = prefs.getBoolean("ui:hideAdult", true)
+
+    fun saveHideAdultContent(value: Boolean) = prefs.putBoolean("ui:hideAdult", value)
+
     fun audioPreference(id: Long): String? = prefs.get("$id:audio", null)
 
     fun saveAudioPreference(id: Long, label: String?) {

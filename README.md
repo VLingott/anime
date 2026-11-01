@@ -11,6 +11,7 @@ Native anime app with one shared Kotlin/Compose UI for Android and Linux desktop
 - Android picture-in-picture
 - In-app update screens with automatic download (Android install prompt, Linux restart)
 - Recents sorting, new-episode markers and fully-watched ordering
+- Adult-content filter (hidden by default) for search results and tag catalog
 
 ## Build
 

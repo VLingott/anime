@@ -151,6 +151,8 @@ private object DesktopProgress : dev.anime.ui.ProgressStore {
     override fun saveAudioPreference(id: Long, label: String?) = Progress.saveAudioPreference(id, label)
     override fun defaultAudioLanguage() = Progress.defaultAudioLanguage()
     override fun saveDefaultAudioLanguage(value: String) = Progress.saveDefaultAudioLanguage(value)
+    override fun hideAdultContent() = Progress.hideAdultContent()
+    override fun saveHideAdultContent(value: Boolean) = Progress.saveHideAdultContent(value)
 }
 
 private object DesktopImages : ImageHost {

@@ -9,6 +9,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.add
@@ -22,8 +23,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 
+@Serializable
+data class AniListTag(
+    val name: String,
+    val adult: Boolean = false,
+)
+
 data class AniListFilter(
     val search: String = "",
+    val includeAdult: Boolean = false,
     val genres: Set<String> = emptySet(),
     val excludedGenres: Set<String> = emptySet(),
     val tags: Set<String> = emptySet(),
@@ -40,10 +48,10 @@ data class AniListFilter(
 
 class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
     private val disk = cacheDir?.let { DiskCache(File(it, "search"), 32L * 1024 * 1024) }
-    private val tagDisk = cacheDir?.let { DiskCache(File(it, "tags-v1"), 2L * 1024 * 1024) }
+    private val tagDisk = cacheDir?.let { DiskCache(File(it, "tags-v2"), 2L * 1024 * 1024) }
     private val cacheJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
     private val tagLock = Mutex()
-    @Volatile private var tagCache: List<String>? = null
+    @Volatile private var tagCache: List<AniListTag>? = null
 
     private val searchCache = ByteLruCache<String, List<SearchHit>>(32L * 1024 * 1024) { hits ->
         var bytes = 256L
@@ -61,7 +69,7 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
     override val kind = "metadata"
 
     private val gql = """
-        query (${'$'}search: String, ${'$'}genres: [String], ${'$'}excludedGenres: [String],
+        query (${'$'}search: String, ${'$'}includeAdult: Boolean, ${'$'}genres: [String], ${'$'}excludedGenres: [String],
                ${'$'}tags: [String], ${'$'}excludedTags: [String], ${'$'}minScore: Int,
                ${'$'}formats: [MediaFormat], ${'$'}statuses: [MediaStatus], ${'$'}season: MediaSeason,
                ${'$'}seasonYear: Int, ${'$'}sort: [MediaSort], ${'$'}page: Int, ${'$'}perPage: Int) {
@@ -69,7 +77,7 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
             media(search: ${'$'}search, type: ANIME, genre_in: ${'$'}genres, genre_not_in: ${'$'}excludedGenres,
                   tag_in: ${'$'}tags, tag_not_in: ${'$'}excludedTags,
                   averageScore_greater: ${'$'}minScore, format_in: ${'$'}formats, status_in: ${'$'}statuses,
-                  season: ${'$'}season, seasonYear: ${'$'}seasonYear, sort: ${'$'}sort, isAdult: false) {
+                  season: ${'$'}season, seasonYear: ${'$'}seasonYear, sort: ${'$'}sort, isAdult: ${'$'}includeAdult) {
               id
               title { romaji english native }
               synonyms
@@ -108,6 +116,7 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
 
         val variables = buildJsonObject {
             if (filter.search.isNotBlank()) put("search", filter.search)
+            put("includeAdult", filter.includeAdult)
             if (filter.genres.isNotEmpty()) put("genres", buildJsonArray { filter.genres.forEach { add(it) } })
             if (filter.excludedGenres.isNotEmpty()) {
                 put("excludedGenres", buildJsonArray { filter.excludedGenres.forEach { add(it) } })
@@ -187,10 +196,10 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
         return hits
     }
 
-    suspend fun allTags(ctx: SourceContext): List<String> = tagLock.withLock {
+    suspend fun allTags(ctx: SourceContext): List<AniListTag> = tagLock.withLock {
         tagCache?.let { return@withLock it }
         val cached = tagDisk?.read("all")?.let { text ->
-            runCatching { cacheJson.decodeFromString<List<String>>(text) }
+            runCatching { cacheJson.decodeFromString<List<AniListTag>>(text) }
                 .onFailure { AppLog.w("anilist", "Ignoring unreadable tag cache", it) }
                 .getOrNull()
         }
@@ -209,11 +218,12 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
             root["data"]?.jsonObject?.get("MediaTagCollection")?.jsonArray.orEmpty()
                 .mapNotNull { element ->
                     val tag = element.jsonObject
-                    if (tag["isAdult"]?.jsonPrimitive?.contentOrNullSafe() == "true") return@mapNotNull null
-                    tag["name"]?.jsonPrimitive?.contentOrNullSafe()?.trim()?.takeIf { it.isNotEmpty() }
+                    val name = tag["name"]?.jsonPrimitive?.contentOrNullSafe()?.trim()
+                        ?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                    AniListTag(name, adult = tag["isAdult"]?.jsonPrimitive?.contentOrNullSafe() == "true")
                 }
-                .distinct()
-                .sortedBy { it.lowercase() }
+                .distinctBy { it.name }
+                .sortedBy { it.name.lowercase() }
         }.onFailure { AppLog.w("anilist", "Tag catalog load failed", it) }.getOrDefault(emptyList())
 
         if (tags.isNotEmpty()) {
@@ -235,6 +245,7 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
 
     private fun filterKey(filter: AniListFilter): String = buildString {
         append(filter.search.trim().lowercase())
+        append('|').append(filter.includeAdult)
         append('|').append(filter.genres.sorted().joinToString(","))
         append('|').append(filter.excludedGenres.sorted().joinToString(","))
         append('|').append(filter.tags.sorted().joinToString(","))

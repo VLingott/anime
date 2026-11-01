@@ -48,6 +48,12 @@ object ProgressStore : dev.anime.ui.ProgressStore {
         prefs.edit().putString("ui:defaultAudio", value).apply()
     }
 
+    override fun hideAdultContent(): Boolean = prefs.getBoolean("ui:hideAdult", true)
+
+    override fun saveHideAdultContent(value: Boolean) {
+        prefs.edit().putBoolean("ui:hideAdult", value).apply()
+    }
+
     override fun audioPreference(id: Long): String? = prefs.getString("$id:audio", null)
 
     override fun saveAudioPreference(id: Long, label: String?) {
