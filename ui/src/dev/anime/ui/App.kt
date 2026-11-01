@@ -521,12 +521,17 @@ fun App(deps: Deps) {
                     },
                     onSearch = { searchMode = true },
                     onResume = { recent ->
+                        val displayTitle = recentTitle(
+                            recent,
+                            titleLanguage,
+                            deps.core.series.peek(recent.id)?.detail,
+                        )
                         player = PlayerArgs(
                             id = recent.id,
                             season = recent.season,
                             episode = recent.episode,
-                            label = "${recent.title} · S${recent.season} E${recent.episode}",
-                            title = recent.title,
+                            label = "$displayTitle · S${recent.season} E${recent.episode}",
+                            title = displayTitle,
                             cover = recent.cover,
                             score = recent.score,
                             episodeTitle = recent.episodeTitle,
@@ -581,7 +586,7 @@ private fun HomeScreen(
             val cachedView = deps.core.series.peek(recent.id)
             val detail = cachedView?.detail
             val seasons = cachedView?.seasons
-            val title = detail?.let { displayTitle(it, titleLanguage) } ?: recent.title
+            val title = recentTitle(recent, titleLanguage, detail)
             val fraction = deps.progress.fraction(recent.id, recent.season, recent.episode)
                 ?: recent.positionMs.toFloat().div(recent.durationMs.toFloat()).takeIf { recent.durationMs > 0 }
             val total = seasons?.sumOf { (_, episodes) -> episodes.count { it.number != null } } ?: 0
@@ -856,7 +861,7 @@ private fun RecentRow(
     onLongPress: () -> Unit,
 ) {
     val cachedDetail = remember(recent.id) { deps.core.series.peek(recent.id)?.detail }
-    val displayRecentTitle = cachedDetail?.let { displayTitle(it, titleLanguage) } ?: recent.title
+    val displayRecentTitle = recentTitle(recent, titleLanguage, cachedDetail)
     val displayScore = recent.score ?: cachedDetail?.averageScore
     val fraction = deps.progress.fraction(recent.id, recent.season, recent.episode)
         ?: recent.positionMs.toFloat().div(recent.durationMs.toFloat()).takeIf { recent.durationMs > 0 }
@@ -1523,6 +1528,15 @@ private fun formatCacheBytes(bytes: Long?): String = when {
     bytes < 1024L -> "$bytes B"
     bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
     else -> "${bytes / (1024L * 1024L)} MB"
+}
+
+private fun recentTitle(recent: RecentSeries, language: TitleLanguage, detail: DetailResult?): String {
+    if (detail != null) return displayTitle(detail, language)
+    return when (language) {
+        TitleLanguage.ROMAJI -> recent.titleRomaji ?: recent.title
+        TitleLanguage.ENGLISH -> recent.titleEnglish ?: recent.titleRomaji ?: recent.title
+        TitleLanguage.NATIVE -> recent.titleNative ?: recent.titleRomaji ?: recent.title
+    }
 }
 
 private fun titleLanguageLabel(language: TitleLanguage): String = when (language) {
@@ -2390,7 +2404,21 @@ private fun PlayerOverlay(
 
     LaunchedEffect(args, resolveAttempt) {
         deps.recents?.record(
-            RecentSeries(args.id, args.title, args.cover, args.score, args.episodeTitle, args.season, args.episode, args.absoluteEpisode, resumeFrom, 0L),
+            RecentSeries(
+                id = args.id,
+                title = args.title,
+                cover = args.cover,
+                score = args.score,
+                episodeTitle = args.episodeTitle,
+                season = args.season,
+                episode = args.episode,
+                absoluteEpisode = args.absoluteEpisode,
+                positionMs = resumeFrom,
+                durationMs = 0L,
+                titleRomaji = headerDetail?.title?.romaji,
+                titleEnglish = headerDetail?.title?.english,
+                titleNative = headerDetail?.title?.native,
+            ),
         )
         val resp = withContext(Dispatchers.IO) {
             runCatching {
@@ -2613,7 +2641,21 @@ private fun PlayerOverlay(
                     onProgress = { pos, dur ->
                         deps.progress.save(args.id, args.season, args.episode, pos, dur)
                         deps.recents?.record(
-                            RecentSeries(args.id, args.title, args.cover, args.score, args.episodeTitle, args.season, args.episode, args.absoluteEpisode, pos, dur),
+                            RecentSeries(
+                                id = args.id,
+                                title = args.title,
+                                cover = args.cover,
+                                score = args.score,
+                                episodeTitle = args.episodeTitle,
+                                season = args.season,
+                                episode = args.episode,
+                                absoluteEpisode = args.absoluteEpisode,
+                                positionMs = pos,
+                                durationMs = dur,
+                                titleRomaji = headerDetail?.title?.romaji,
+                                titleEnglish = headerDetail?.title?.english,
+                                titleNative = headerDetail?.title?.native,
+                            ),
                         )
                     },
                     onError = { reason ->

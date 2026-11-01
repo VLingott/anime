@@ -19,6 +19,9 @@ data class RecentSeries(
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val updatedAt: Long = 0L,
+    val titleRomaji: String? = null,
+    val titleEnglish: String? = null,
+    val titleNative: String? = null,
 )
 
 interface RecentsStore {
