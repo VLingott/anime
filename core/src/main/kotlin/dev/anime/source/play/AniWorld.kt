@@ -5,6 +5,8 @@ import dev.anime.cache.DiskCache
 import dev.anime.model.PlaySource
 import dev.anime.source.SourceContext
 import dev.anime.store.Jsonx
+import dev.anime.util.AppLog
+import dev.anime.util.stripSeasonMarkers
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import java.io.File
@@ -14,7 +16,6 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -26,7 +27,6 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.net.URLEncoder
-import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 
 class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
@@ -39,18 +39,7 @@ class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
     private val structureDisk = cacheDir?.let { DiskCache(File(it, "aniworld-structure"), 1L * 1024 * 1024) }
     private val structureJson = Json { ignoreUnknownKeys = true }
 
-    private val junk = listOf("@$", "^^", "~@", "%?", "*~", "!!", "#&")
-    private val jsonScript = Regex(
-        """<script[^>]*type=["']application/json["'][^>]*>(.*?)</script>""",
-        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
-    )
     private val jsRedirect = Regex("""window\.location\.href\s*=\s*'([^']+)'""")
-    private val legacyPayload = Regex("""var a168c='([^']+)'""")
-    private val m3u8Pattern = Regex("""https?://[^'"\s<>]+\.m3u8[^'"\s<>]*""")
-    private val germanTitlePattern = Regex("""class="episodeGermanTitle">([^<]*)<""")
-    private val englishTitlePattern = Regex("""class="episodeEnglishTitle">([^<]*)<""")
-    private val listItem = Regex("""<li[^>]*data-lang-key="(\d+)"[^>]*>""")
-    private val linkTarget = Regex("""data-link-target="([^"]+)"""")
 
     override suspend fun resolve(
         detail: DetailResult,
@@ -68,16 +57,14 @@ class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
             add(season.coerceAtLeast(1))
         }.toList()
 
-        var byLanguage = LinkedHashMap<Int, MutableList<String>>()
+        var byLanguage = LinkedHashMap<Int, List<String>>()
         var matchedHtml: String? = null
-        var matchedSeason: Int? = null
         for (pageSeason in pageSeasons) {
             val html = fetch("$BASE/anime/stream/$slug/staffel-$pageSeason/episode-$episode", ctx) ?: continue
-            val parsed = parseLanguages(html)
+            val parsed = AniWorldParser.parseLanguages(html)
             if (parsed.isNotEmpty()) {
                 byLanguage = parsed
                 matchedHtml = html
-                matchedSeason = pageSeason
                 break
             }
         }
@@ -90,27 +77,22 @@ class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
                     ctx,
                 )
                 if (html != null) {
-                    val parsed = parseLanguages(html)
+                    val parsed = AniWorldParser.parseLanguages(html)
                     if (parsed.isNotEmpty()) {
                         byLanguage = parsed
                         matchedHtml = html
-                        matchedSeason = mapped.first
                     }
                 }
             }
         }
         if (byLanguage.isEmpty()) return emptyList()
 
-        val pageHtml = matchedHtml
-        val episodeTitleGerman = pageHtml?.let {
-            germanTitlePattern.find(it)?.groupValues?.get(1)?.let(::decodeEntities)?.let(::cleanEpisodeTitle)
-        }
-        val episodeTitleEnglish = pageHtml?.let {
-            englishTitlePattern.find(it)?.groupValues?.get(1)?.let(::decodeEntities)?.let(::cleanEpisodeTitle)
-        }
+        val titles = matchedHtml?.let(AniWorldParser::episodeTitles) ?: AniWorldParser.EpisodeTitles(null, null)
+        val episodeTitleGerman = titles.german
+        val episodeTitleEnglish = titles.english
 
         for (language in LANGUAGE_ORDER) {
-            val targets = byLanguage[language]?.distinct()?.take(4) ?: continue
+            val targets = byLanguage[language]?.take(4) ?: continue
             val sources = coroutineScope {
                 targets.map { target ->
                     async(Dispatchers.IO) {
@@ -155,18 +137,16 @@ class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
     private suspend fun episodeStructure(slug: String, ctx: SourceContext): List<SeasonCount> {
         structureCache[slug]?.let { return it }
         structureDisk?.read(slug)?.let { text ->
-            val entry = runCatching { structureJson.decodeFromString<StructureEntry>(text) }.getOrNull()
+            val entry = runCatching { structureJson.decodeFromString<StructureEntry>(text) }
+                .onFailure { AppLog.w("aniworld", "Ignoring unreadable season cache for $slug", it) }
+                .getOrNull()
             if (entry != null && System.currentTimeMillis() - entry.savedAt < 24 * 60 * 60_000L) {
                 structureCache[slug] = entry.seasons
                 return entry.seasons
             }
         }
         val seriesHtml = fetch("$BASE/anime/stream/$slug", ctx) ?: return emptyList()
-        val seasons = Regex("""staffel-(\d+)""").findAll(seriesHtml)
-            .mapNotNull { it.groupValues[1].toIntOrNull() }
-            .distinct()
-            .sorted()
-            .toList()
+        val seasons = AniWorldParser.seasonNumbers(seriesHtml)
         if (seasons.isEmpty()) return emptyList()
 
         val gate = Semaphore(4)
@@ -175,11 +155,7 @@ class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
                 async(Dispatchers.IO) {
                     gate.withPermit {
                         val html = fetch("$BASE/anime/stream/$slug/staffel-$season", ctx) ?: return@withPermit null
-                        val numbers = Regex("""staffel-$season/episode-(\d+)""")
-                            .findAll(html)
-                            .mapNotNull { it.groupValues[1].toIntOrNull() }
-                            .toList()
-                        val maxEpisode = numbers.maxOrNull()
+                        val maxEpisode = AniWorldParser.episodeNumbers(html, season).maxOrNull()
                         if (maxEpisode == null) null else SeasonCount(season, maxEpisode)
                     }
                 }
@@ -188,35 +164,17 @@ class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
         structureCache[slug] = counts
         runCatching {
             structureDisk?.write(slug, structureJson.encodeToString(StructureEntry(System.currentTimeMillis(), counts)))
-        }
+        }.onFailure { AppLog.w("aniworld", "Could not persist season structure for $slug", it) }
         return counts
     }
 
-    private fun parseLanguages(html: String): LinkedHashMap<Int, MutableList<String>> {
-        val byLanguage = LinkedHashMap<Int, MutableList<String>>()
-        for (match in listItem.findAll(html)) {
-            val tag = match.value
-            val language = match.groupValues[1].toIntOrNull() ?: continue
-            val target = linkTarget.find(tag)?.groupValues?.get(1) ?: continue
-            byLanguage.getOrPut(language) { mutableListOf() }.add(target)
-        }
-        return byLanguage
-    }
-
     private fun titleSeason(detail: DetailResult): Int {
-        val titles = listOfNotNull(detail.title?.romaji, detail.title?.english)
-        for (title in titles) {
-            Regex("(?i)(\\d+)(st|nd|rd|th)\\s+season").find(title)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
-            Regex("(?i)season\\s+(\\d+)").find(title)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
-            Regex("(?i)part\\s+(\\d+)").find(title)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+        for (title in listOfNotNull(detail.title?.romaji, detail.title?.english)) {
+            val season = AniWorldParser.titleSeason(title)
+            if (season != 1) return season
         }
         return 1
     }
-
-    private fun stripSeasonMarkers(title: String): String = title
-        .replace(Regex("(?i)\\b(\\d+(st|nd|rd|th)\\s+season|season\\s+\\d+|part\\s+\\d+|cour\\s+\\d+)\\b"), " ")
-        .replace(Regex("\\s+"), " ")
-        .trim()
 
     private suspend fun slugFor(detail: DetailResult, ctx: SourceContext): String? {
         slugCache[detail.id]?.let { return it }
@@ -235,7 +193,8 @@ class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
                     header(HttpHeaders.UserAgent, UA)
                     header(HttpHeaders.Accept, "application/json")
                 }.bodyAsText()
-            }.getOrNull() ?: continue
+            }.onFailure { AppLog.w("aniworld", "Series search failed for \"$title\"", it) }
+                .getOrNull() ?: continue
 
             val results = runCatching {
                 Jsonx.parseToJsonElement(text).let { it as? JsonArray }.orEmpty().mapNotNull { el ->
@@ -244,7 +203,8 @@ class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
                     val link = obj["link"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
                     name to link
                 }
-            }.getOrDefault(emptyList())
+            }.onFailure { AppLog.w("aniworld", "Invalid series search response for \"$title\"", it) }
+                .getOrDefault(emptyList())
             if (results.isEmpty()) continue
             if (fallback == null) fallback = results.first().second
 
@@ -283,7 +243,8 @@ class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
                 }
             }
             current
-        }.getOrNull()
+        }.onFailure { AppLog.w("aniworld", "Redirect resolution failed for $target", it) }
+            .getOrNull()
     }
 
     private suspend fun resolveEmbed(url: String, ctx: SourceContext): String? {
@@ -297,61 +258,8 @@ class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
             html = fetch(current, ctx) ?: return null
             hops++
         }
-        decodeVoePage(html)?.let { return it }
-        return m3u8Pattern.find(html)?.value
-    }
-
-    private fun decodeVoePage(html: String): String? {
-        for (match in jsonScript.findAll(html)) {
-            val element = runCatching { Json.parseToJsonElement(match.groupValues[1].trim()) }.getOrNull() ?: continue
-            val encoded = when (element) {
-                is JsonArray -> element.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
-                is JsonPrimitive -> listOfNotNull(element.contentOrNull)
-                else -> emptyList()
-            }
-            for (candidate in encoded) {
-                decodeVoe(candidate)?.let { return it }
-            }
-        }
-        legacyPayload.find(html)?.groupValues?.get(1)?.let { encoded ->
-            decodeVoe(encoded)?.let { return it }
-        }
-        return null
-    }
-
-    private fun decodeVoe(encoded: String): String? = runCatching {
-        var text = rotateLetters(encoded)
-        for (part in junk) text = text.replace(part, "_")
-        text = text.replace("_", "")
-        val first = String(base64(text), Charsets.UTF_8)
-        val shifted = buildString(first.length) {
-            for (ch in first) append((ch.code - 3).toChar())
-        }
-        val second = String(base64(shifted.reversed()), Charsets.UTF_8)
-        val obj = Json.parseToJsonElement(second).jsonObject
-        obj["source"]?.jsonPrimitive?.contentOrNull?.takeIf { it.startsWith("http") }
-    }.getOrNull()
-
-    private fun base64(value: String): ByteArray {
-        val padded = when (value.length % 4) {
-            2 -> "$value=="
-            3 -> "$value="
-            else -> value
-        }
-        return Base64.getDecoder().decode(padded)
-    }
-
-    private fun rotateLetters(value: String): String = buildString(value.length) {
-        for (ch in value) {
-            val code = ch.code
-            append(
-                when {
-                    code in 65..90 -> ((code - 65 + 13) % 26 + 65).toChar()
-                    code in 97..122 -> ((code - 97 + 13) % 26 + 97).toChar()
-                    else -> ch
-                },
-            )
-        }
+        VoeDecoder.decodePage(html)?.let { return it }
+        return VoeDecoder.findM3u8(html)
     }
 
     private suspend fun fetch(url: String, ctx: SourceContext): String? = runCatching {
@@ -359,23 +267,8 @@ class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
             header(HttpHeaders.UserAgent, UA)
             header(HttpHeaders.Accept, "text/html,application/xhtml+xml")
         }.bodyAsText()
-    }.getOrNull()
-
-    private fun cleanEpisodeTitle(value: String): String? = value
-        .replace(Regex("""\s*\[Episode\s+\d+]\s*$"""), "")
-        .trim()
-        .takeIf { it.isNotEmpty() }
-
-    private fun decodeEntities(value: String): String = value
-        .replace("&#039;", "'")
-        .replace("&apos;", "'")
-        .replace("&quot;", "\"")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-        .replace(Regex("""&#(\d+);""")) { match ->
-            match.groupValues[1].toIntOrNull()?.toChar()?.toString() ?: match.value
-        }
+    }.onFailure { AppLog.w("aniworld", "Page fetch failed: ${url.removePrefix(BASE)}", it) }
+        .getOrNull()
 
     private fun normalize(value: String): String =
         value.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()

@@ -6,6 +6,7 @@ import dev.anime.source.SourceContext
 import dev.anime.store.arr
 import dev.anime.store.obj
 import dev.anime.store.str
+import dev.anime.util.AppLog
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
@@ -39,7 +40,8 @@ class ReAnimeProvider : PlaybackProvider {
                 header(HttpHeaders.Accept, "application/json")
                 header(HttpHeaders.Referrer, referer)
             }.bodyAsText()
-        }.getOrNull() ?: return emptyList()
+        }.onFailure { AppLog.w("reanime", "Stream API failed for ${detail.id}/$episode", it) }
+            .getOrNull() ?: return emptyList()
 
         val servers = runCatching {
             Json.parseToJsonElement(flixText).obj()?.get("servers")?.arr().orEmpty().mapNotNull { el ->
@@ -50,7 +52,8 @@ class ReAnimeProvider : PlaybackProvider {
                     dataLink = o["dataLink"]?.str() ?: return@mapNotNull null,
                 )
             }
-        }.getOrDefault(emptyList())
+        }.onFailure { AppLog.w("reanime", "Invalid stream API response for ${detail.id}/$episode", it) }
+            .getOrDefault(emptyList())
 
         val ordered = servers
             .filter { it.dataLink.isNotBlank() }
@@ -68,7 +71,9 @@ class ReAnimeProvider : PlaybackProvider {
                 if (server.serverName.isNotBlank()) append(' ').append(server.serverName)
             }
             if (!resolvedOne) {
-                val extracted = runCatching { FlixCloud.extract(server.dataLink, ctx) }.getOrNull() ?: continue
+                val extracted = runCatching { FlixCloud.extract(server.dataLink, ctx) }
+                    .onFailure { AppLog.w("reanime", "Embed extraction failed for ${server.serverName}", it) }
+                    .getOrNull() ?: continue
                 val (streamUrl, streamCtx) = extracted
                 FlixCloud.register(streamUrl, streamCtx.wPayload, streamCtx.mask)
                 val decrypted = FlixCloud.DEC + "/parse-flixcloud?url=" +
@@ -107,12 +112,14 @@ class ReAnimeProvider : PlaybackProvider {
                 header(HttpHeaders.Accept, "application/json")
                 header(HttpHeaders.Referrer, "https://reanime.to/search")
             }.bodyAsText()
-        }.getOrNull() ?: return null
+        }.onFailure { AppLog.w("reanime", "Slug search failed for \"$title\"", it) }
+            .getOrNull() ?: return null
         val slug = runCatching {
             Json.parseToJsonElement(text).obj()?.get("results")?.arr().orEmpty()
                 .firstOrNull { it.obj()?.get("anilist_id")?.str()?.toLongOrNull() == detail.id }
                 ?.obj()?.get("anime_id")?.str()
-        }.getOrNull() ?: return null
+        }.onFailure { AppLog.w("reanime", "Invalid slug search response for \"$title\"", it) }
+            .getOrNull() ?: return null
         slugCache[detail.id] = slug
         return slug
     }

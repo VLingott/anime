@@ -92,7 +92,7 @@ class MainActivity : ComponentActivity() {
                         .setAspectRatio(Rational(16, 9))
                         .build(),
                 )
-            }
+            }.onFailure { AppLog.w("player", "Could not enter picture-in-picture", it) }
         }
     }
 
@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
             kotlinx.coroutines.delay(20_000)
             while (true) {
                 runCatching { AppCore.playback.probe() }
+                    .onFailure { AppLog.w("provider", "Provider health probe failed", it) }
                 kotlinx.coroutines.delay(15 * 60_000L)
             }
         }
@@ -133,7 +134,10 @@ private fun androidDeps(activity: MainActivity): Deps = Deps(
     player = activity.playerHostForDeps(),
     images = AndroidImages,
     progress = ProgressStore,
-    openUrl = { url -> runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } },
+    openUrl = { url ->
+        runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            .onFailure { AppLog.w("link", "Could not open $url", it) }
+    },
     back = AndroidBackHost,
     recents = FileRecentsStore(java.io.File(activity.filesDir, "recents.json")),
     appVersion = BuildConfig.VERSION_NAME,
@@ -193,7 +197,8 @@ internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
             val result = AppCore.hls.handle(master)
             val text = (result as? dev.anime.web.HlsProxy.Result.Playlist)?.text ?: return@runCatching emptyList()
             parseResolutions(text).filter { it.id != "auto" }
-        }.getOrDefault(emptyList())
+        }.onFailure { AppLog.w("player", "Resolution probe failed", it) }
+            .getOrDefault(emptyList())
     }
 
     @Composable
@@ -263,7 +268,8 @@ internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
                         val result = AppCore.hls.handle(master)
                         val text = (result as? dev.anime.web.HlsProxy.Result.Playlist)?.text ?: return@runCatching emptyList()
                         parseResolutions(text)
-                    }.getOrDefault(emptyList())
+                    }.onFailure { AppLog.w("player", "Resolution probe failed", it) }
+                        .getOrDefault(emptyList())
                 }
                 if (options.isNotEmpty()) {
                     session.updateResolutions(options)
@@ -576,6 +582,9 @@ private fun installUpdate(context: Context, apk: File) {
                 .setDataAndType(uri, "application/vnd.android.package-archive")
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
         )
+    }.onFailure {
+        AppLog.e("update", "Could not open the package installer", it)
+        Toast.makeText(context, "Could not open the installer: ${it.message}", Toast.LENGTH_LONG).show()
     }
 }
 

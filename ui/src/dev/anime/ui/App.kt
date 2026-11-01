@@ -963,7 +963,9 @@ private fun SearchScreen(
             .collect { last ->
                 if (!loading && !loadingMore && !endReached && hits.isNotEmpty() && last >= shownCount - 4) {
                     loadingMore = true
-                    val next = runCatching { fetch(page) }.getOrDefault(emptyList())
+                    val next = runCatching { fetch(page) }
+                        .onFailure { AppLog.w("search", "Next search page failed", it) }
+                        .getOrDefault(emptyList())
                     val existing = hits.mapNotNull { it.externalId }.toSet()
                     hits = hits + next.filter { it.externalId !in existing }
                     page += 1
@@ -1502,7 +1504,9 @@ private fun DetailScreen(
             if (loading) showSkeleton = true
         }
         val view = withContext(Dispatchers.IO) {
-            runCatching { deps.core.series.load(id, deps.core.ctx, refresh = cached != null) }.getOrNull()
+            runCatching { deps.core.series.load(id, deps.core.ctx, refresh = cached != null) }
+                .onFailure { AppLog.w("series", "Could not load series $id", it) }
+                .getOrNull()
         }
         skeletonTimer.cancel()
         detail = view?.detail
@@ -1547,7 +1551,7 @@ private fun DetailScreen(
                     episodeTitle = seasons.firstOrNull { it.first == target.first }
                         ?.second?.firstOrNull { it.number == target.second }?.title,
                 )
-            }
+            }.onFailure { AppLog.w("playback", "Prewarm failed for $id S${target.first} E${target.second}", it) }
         }
     }
 
@@ -2333,6 +2337,8 @@ private fun PlayerOverlay(
                     absoluteEpisode = args.absoluteEpisode,
                     episodeTitle = args.episodeTitle,
                 )
+            }.onFailure {
+                AppLog.w("playback", "Play resolution failed for ${args.id} S${args.season} E${args.episode}", it)
             }.getOrNull()
         }
         sources = resp?.sources.orEmpty()
@@ -2356,6 +2362,8 @@ private fun PlayerOverlay(
                         absoluteEpisode = args.absoluteEpisode,
                         episodeTitle = args.episodeTitle,
                     )
+                }.onFailure {
+                    AppLog.w("playback", "Play source refresh failed for ${args.id} S${args.season} E${args.episode}", it)
                 }.getOrNull()
             }
             if (fresh != null && fresh.sources.isNotEmpty()) {
@@ -2409,7 +2417,9 @@ private fun PlayerOverlay(
         val results = coroutineScope {
             missing.map { url ->
                 async {
-                    url to runCatching { deps.player.probeResolutions(url) }.getOrDefault(emptyList())
+                    url to runCatching { deps.player.probeResolutions(url) }
+                        .onFailure { AppLog.w("player", "Resolution probe failed", it) }
+                        .getOrDefault(emptyList())
                 }
             }.awaitAll()
         }

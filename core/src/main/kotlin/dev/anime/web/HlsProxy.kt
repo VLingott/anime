@@ -5,9 +5,11 @@ import dev.anime.util.AppLog
 import dev.anime.source.play.FlixCloud
 import io.ktor.client.request.get
 import io.ktor.client.request.header
-import io.ktor.client.statement.bodyAsBytes
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
+import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -23,17 +25,17 @@ class HlsProxy(
     private val ctx: SourceContext,
     dir: String = "data/hls-cache",
     private val capBytes: Long = 512L * 1024 * 1024,
+    private val maxSegmentBytes: Long = 40L * 1024 * 1024,
     private val urlFor: (String) -> String = { "/api/hls?u=" + URLEncoder.encode(it, Charsets.UTF_8) },
 ) {
     sealed interface Result {
         data class Playlist(val text: String) : Result
-        data class Binary(val bytes: ByteArray, val contentType: String) : Result
         data class FileData(val file: File, val contentType: String) : Result
     }
 
     private val root = File(dir).apply { mkdirs() }
     private val gate = Semaphore(8)
-    private val inFlight = ConcurrentHashMap<String, CompletableDeferred<ByteArray?>>()
+    private val inFlight = ConcurrentHashMap<String, CompletableDeferred<File?>>()
     private val targets = ConcurrentHashMap<String, String>()
 
     @Volatile private var total = 0L
@@ -41,8 +43,10 @@ class HlsProxy(
 
     init {
         val files = root.listFiles() ?: emptyArray()
-        entries = files.size
-        total = files.sumOf { it.length() }
+        files.filter { !it.name.endsWith(".bin") }.forEach { it.delete() }
+        val cached = files.filter { it.name.endsWith(".bin") }
+        entries = cached.size
+        total = cached.sumOf { it.length() }
     }
 
     suspend fun openLink(dataLink: String): Result? {
@@ -62,6 +66,16 @@ class HlsProxy(
         } else {
             targets[requested]
         }
+    }
+
+    suspend fun openLinkFile(dataLink: String): Result? {
+        val extracted = FlixCloud.extract(dataLink, ctx) ?: return null
+        val (streamUrl, streamCtx) = extracted
+        FlixCloud.register(streamUrl, streamCtx.wPayload, streamCtx.mask)
+        val decrypted = FlixCloud.DEC + "/parse-flixcloud?url=" +
+            URLEncoder.encode(streamUrl, Charsets.UTF_8) +
+            "&w_payload=" + URLEncoder.encode(streamCtx.wPayload, Charsets.UTF_8)
+        return handleFile(decrypted)
     }
 
     suspend fun handleFile(rawUrl: String): Result? {
@@ -95,9 +109,9 @@ class HlsProxy(
             return Result.Playlist(rewritePlaylist(text, effectiveBase(url)))
         }
 
-        val bytes = cached(url) ?: return null
+        val file = cachedFile(url) ?: return null
         val contentType = if (isKeyPath(url)) "application/octet-stream" else "video/mp2t"
-        return Result.Binary(bytes, contentType)
+        return Result.FileData(file, contentType)
     }
 
     private fun isPlaylistPath(url: String): Boolean {
@@ -149,21 +163,17 @@ class HlsProxy(
 
     private suspend fun cachedFile(url: String): File? {
         val file = File(root, sha1(url) + ".bin")
-        if (file.length() > 0) return file
-        cached(url) ?: return null
-        return file.takeIf { it.length() > 0 }
-    }
+        if (file.length() > 0) {
+            file.setLastModified(System.currentTimeMillis())
+            return file
+        }
 
-    private suspend fun cached(url: String): ByteArray? {
-        val file = File(root, sha1(url) + ".bin")
-        if (file.length() > 0) return runCatching { file.readBytes() }.getOrNull()
-
-        val mine = CompletableDeferred<ByteArray?>()
+        val mine = CompletableDeferred<File?>()
         val running = inFlight.putIfAbsent(file.name, mine)
         if (running != null) return running.await()
 
-        val bytes = try {
-            fetch(url, file)
+        val result = try {
+            fetchToFile(url, file)
         } catch (error: Exception) {
             val host = runCatching { URI(url).host }.getOrNull() ?: "upstream"
             AppLog.w("hls", "Segment fetch failed from $host", error)
@@ -171,50 +181,102 @@ class HlsProxy(
         } finally {
             inFlight.remove(file.name)
         }
-        mine.complete(bytes)
-        return bytes
+        mine.complete(result)
+        return result
     }
 
-    private suspend fun fetch(url: String, file: File): ByteArray? {
-        val raw = withTimeoutOrNull(25_000) {
+    private suspend fun fetchToFile(url: String, file: File): File? {
+        val temp = File(file.parentFile, file.name + ".part")
+        val decoded = File(file.parentFile, file.name + ".decoded")
+        val downloaded = withTimeoutOrNull(25_000) {
             gate.withPermit {
-                ctx.http.get(url) {
+                ctx.http.prepareGet(url) {
                     header(HttpHeaders.UserAgent, UA)
                     header(HttpHeaders.Accept, "*/*")
                     header(HttpHeaders.Origin, FlixCloud.BASE)
                     header(HttpHeaders.Referrer, FlixCloud.BASE + "/")
-                }.bodyAsBytes()
+                }.execute { response ->
+                    if (response.status.value !in 200..299) return@execute false
+                    val channel = response.bodyAsChannel()
+                    val buffer = ByteArray(64 * 1024)
+                    var written = 0L
+                    temp.outputStream().use { output ->
+                        while (true) {
+                            val read = channel.readAvailable(buffer, 0, buffer.size)
+                            if (read <= 0) break
+                            written += read
+                            if (written > maxSegmentBytes) return@execute false
+                            output.write(buffer, 0, read)
+                        }
+                    }
+                    true
+                }
             }
-        } ?: return null
-        if (raw.isEmpty() || raw.size > 40 * 1024 * 1024) return null
+        } ?: false
+        if (!downloaded || temp.length() == 0L) {
+            temp.delete()
+            return null
+        }
 
-        val decoded = decode(raw, url)
-        runCatching { file.writeBytes(decoded) }
-        total += decoded.size
-        entries += 1
-        if (total > capBytes) prune()
-        return decoded
+        return try {
+            decodeToFile(temp, decoded, url)
+            if (!decoded.renameTo(file)) {
+                decoded.copyTo(file, overwrite = true)
+                decoded.delete()
+            }
+            total += file.length()
+            entries += 1
+            if (total > capBytes) prune()
+            file
+        } catch (error: Exception) {
+            AppLog.w("hls", "Segment decode failed", error)
+            file.delete()
+            null
+        } finally {
+            temp.delete()
+            decoded.delete()
+        }
     }
 
-    private fun decode(raw: ByteArray, url: String): ByteArray {
-        val headerSize = when {
-            raw.size >= 12 && raw[0] == 0x52.toByte() && raw[1] == 0x49.toByte() &&
-                raw[2] == 0x46.toByte() && raw[3] == 0x46.toByte() &&
-                raw[8] == 0x57.toByte() && raw[9] == 0x45.toByte() &&
-                raw[10] == 0x42.toByte() && raw[11] == 0x50.toByte() -> 12
-            raw.size >= 8 && raw[0] == 0x89.toByte() && raw[1] == 0x50.toByte() &&
-                raw[2] == 0x4E.toByte() && raw[3] == 0x47.toByte() -> 8
-            else -> return raw
+    private fun decodeToFile(raw: File, target: File, url: String) {
+        val header = ByteArray(12)
+        val input = raw.inputStream()
+        try {
+            val read = input.read(header)
+            val headerSize = when {
+                read >= 12 && header[0] == 0x52.toByte() && header[1] == 0x49.toByte() &&
+                    header[2] == 0x46.toByte() && header[3] == 0x46.toByte() &&
+                    header[8] == 0x57.toByte() && header[9] == 0x45.toByte() &&
+                    header[10] == 0x42.toByte() && header[11] == 0x50.toByte() -> 12
+                read >= 8 && header[0] == 0x89.toByte() && header[1] == 0x50.toByte() &&
+                    header[2] == 0x4E.toByte() && header[3] == 0x47.toByte() -> 8
+                else -> 0
+            }
+            val mask = if (headerSize > 0) FlixCloud.contextFor(url)?.mask ?: MASK else null
+            target.outputStream().use { output ->
+                if (headerSize == 0 && read > 0) output.write(header, 0, read)
+                val buffer = ByteArray(64 * 1024)
+                var offset = 0
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count <= 0) break
+                    if (mask != null) {
+                        for (i in 0 until count) {
+                            buffer[i] = (buffer[i].toInt() xor mask[(offset + i) and 15].toInt()).toByte()
+                        }
+                    }
+                    output.write(buffer, 0, count)
+                    offset += count
+                }
+            }
+        } finally {
+            input.close()
         }
-        val body = raw.copyOfRange(headerSize, raw.size)
-        val mask = FlixCloud.contextFor(url)?.mask ?: MASK
-        for (i in body.indices) body[i] = (body[i].toInt() xor mask[i and 15].toInt()).toByte()
-        return body
     }
 
     private fun prune() {
         val target = (capBytes * 0.85).toLong()
-        val files = root.listFiles()?.sortedBy { it.lastModified() } ?: return
+        val files = root.listFiles()?.filter { it.name.endsWith(".bin") }?.sortedBy { it.lastModified() } ?: return
         var live = total
         for (f in files) {
             if (live <= target) break

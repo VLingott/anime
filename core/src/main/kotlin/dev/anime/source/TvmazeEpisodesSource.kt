@@ -11,6 +11,7 @@ import dev.anime.store.arr
 import dev.anime.store.int
 import dev.anime.store.obj
 import dev.anime.store.str
+import dev.anime.util.AppLog
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import kotlinx.serialization.json.Json
@@ -92,8 +93,13 @@ class TvmazeEpisodesSource : StreamSource {
         val res = ctx.http.get(
             "https://api.tvmaze.com/search/shows?q=" + URLEncoder.encode(query.take(80), Charsets.UTF_8),
         )
-        if (res.status.value != 200) return emptyList()
-        val body = runCatching { Json.parseToJsonElement(res.bodyAsText()).arr() }.getOrNull() ?: return emptyList()
+        if (res.status.value != 200) {
+            AppLog.w("tvmaze", "Show search returned HTTP ${res.status.value} for \"$query\"")
+            return emptyList()
+        }
+        val body = runCatching { Json.parseToJsonElement(res.bodyAsText()).arr() }
+            .onFailure { AppLog.w("tvmaze", "Invalid show search response for \"$query\"", it) }
+            .getOrNull() ?: return emptyList()
         return body.orEmpty().mapNotNull { el ->
             val s = el.obj()?.get("show")?.obj() ?: return@mapNotNull null
             val genres = s["genres"]?.arr().orEmpty().mapNotNull { g -> g.str() }
@@ -123,7 +129,8 @@ class TvmazeEpisodesSource : StreamSource {
                     url = o["url"]?.str(),
                 )
             }.filter { it.number != null }
-        }.getOrDefault(emptyList())
+        }.onFailure { AppLog.w("tvmaze", "Episode fetch failed for show $showId", it) }
+            .getOrDefault(emptyList())
 
     private fun norm(s: String): String = s.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()
 }

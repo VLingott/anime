@@ -7,6 +7,7 @@ import dev.anime.model.DetailResult
 import dev.anime.source.SourceContext
 import dev.anime.source.TvmazeEpisode
 import dev.anime.source.TvmazeEpisodesSource
+import dev.anime.util.AppLog
 import dev.anime.util.hasSeasonMarker
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -39,7 +40,9 @@ class SeriesRepository(
     fun peek(id: Long): SeriesView? {
         cache.get(id)?.let { return it }
         val stored = disk?.read(id.toString()) ?: return null
-        val decoded = runCatching { json.decodeFromString<CachedSeries>(stored) }.getOrNull() ?: return null
+        val decoded = runCatching { json.decodeFromString<CachedSeries>(stored) }
+            .onFailure { AppLog.w("series", "Ignoring unreadable series cache for $id", it) }
+            .getOrNull() ?: return null
         val view = SeriesView(decoded.detail, decoded.seasons)
         cache.put(id, view)
         return view

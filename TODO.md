@@ -4,13 +4,15 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 
 ## P0 — robustness
 
-- [x] Read cached HLS segments from disk streams on Android instead of retaining whole byte arrays in `HlsDataSource` (upstream fetch still buffers for decode). Range/partial reads remain.
+- [x] HLS upstream segments stream into `.part` files in 64 KB chunks with a 40 MB hard cap; masked segments are decoded to disk without whole-segment buffers.
+- [x] HLS cache serves files to Android/desktop; `HlsDataSource` honours `DataSpec.position`/length for Range and bounded partial reads.
+- [x] Tests cover upstream streaming, cached reads without refetch, the segment size cap, and Android source compilation.
 - [x] Verify the downloaded APK is signed by the installed app before offering install.
 - [x] Android audio focus handling.
 - [x] Remove the dev server/web module.
 - [x] Terminal error screen with reason + retry; update error dialog.
 - [x] Structured log file + uncaught-exception logging on Android and desktop (`anime.log`, 2 MB rotation). Add an in-app log viewer later.
-- [x] Contextual logging added at provider, search, HLS segment and update boundaries.
+- [x] Reviewed silent `runCatching` paths; added contextual warnings for AniWorld/Re:ANIME/TVmaze parsing, season caches, series/search/history/cache I/O, HLS fetches, resolution probes, image loads and update/install failures. Benign fallbacks (URI/entity parsing, best-effort cleanup) stay silent.
 - [x] Play cache stores provider URLs untransformed; proxy/device URLs are applied on every read.
 - [x] URL entries are validated on use (90 min TTL) with synchronous refresh and stale fallback; capabilities (languages/resolutions) persist separately in `capabilities-v1`/`resolutions`.
 - [x] Single-flight series loads.
@@ -23,6 +25,7 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Never cache empty TV season lists; retry failed lookups and expose an episodes Retry state.
 - [x] Cache directories versioned for metadata migrations (`series-v5`, `play-v6`).
 - [x] Unit tests for version comparison, title/season parsing, absolute episode mapping, cache eviction and disk trim.
+- [x] Parser tests use captured AniWorld/VOE HTML: hoster language mapping, episode titles/entities, season/episode lists, title markers, VOE payload decode and direct m3u8 fallback.
 
 - [x] Android: player screen state survives process death via saved state; audio focus + becoming-noisy handling enabled.
 - [x] Desktop HLS proxy uses a free localhost port.
@@ -75,7 +78,7 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 ## Known issues / notes
 
 - Android releases are debug-signed; changing the keystore breaks in-place updates.
-- Provider scrapers (AniWorld/VOE/Vidmoly, Re:ANIME/FlixCloud) can break when sites change; no parser telemetry yet.
+- Provider scrapers (AniWorld/VOE/Vidmoly, Re:ANIME/FlixCloud) can break when sites change; parser failures are logged locally in `anime.log`.
 - Absolute episode mapping skips unnumbered specials, so rare special-numbering cases can still be off.
 - Current play cache is intentionally permanent; refresh happens in the background.
 - The old 8080 dev server and website were removed from the repo.

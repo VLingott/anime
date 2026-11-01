@@ -2,6 +2,7 @@ package dev.anime.store
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
+import dev.anime.util.AppLog
 import kotlinx.serialization.json.Json
 import java.io.File
 
@@ -50,12 +51,13 @@ class FileRecentsStore(private val file: File, private val limit: Int = 20) : Re
 
     private fun load(): MutableList<RecentSeries> = runCatching {
         json.decodeFromString<List<RecentSeries>>(file.readText()).toMutableList()
-    }.getOrDefault(mutableListOf())
+    }.onFailure { AppLog.w("recents", "Could not read watch history from ${file.name}", it) }
+        .getOrDefault(mutableListOf())
 
     private fun save(list: List<RecentSeries>) {
         runCatching {
             file.parentFile?.mkdirs()
             file.writeText(json.encodeToString(list))
-        }
+        }.onFailure { AppLog.e("recents", "Could not save watch history to ${file.name}", it) }
     }
 }

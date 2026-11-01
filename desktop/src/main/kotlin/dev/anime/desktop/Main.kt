@@ -106,7 +106,10 @@ private object Core {
 
     fun startProxy() {
         if (proxy != null) return
-        proxy = Proxy().also { runCatching { it.start(NanoHTTPD.SOCKET_READ_TIMEOUT, true) } }
+        proxy = Proxy().also {
+            runCatching { it.start(NanoHTTPD.SOCKET_READ_TIMEOUT, true) }
+                .onFailure { error -> AppLog.e("hls", "Could not start the local HLS proxy", error) }
+        }
     }
 
     class Proxy : NanoHTTPD("127.0.0.1", proxyPort) {
@@ -119,13 +122,12 @@ private object Core {
             val u = session.parameters["u"]?.firstOrNull()
             val link = session.parameters["link"]?.firstOrNull()
             val result = runBlocking {
-                runCatching { if (!link.isNullOrBlank()) hls.openLink(link) else hls.handle(u.orEmpty()) }.getOrNull()
+                runCatching {
+                    if (!link.isNullOrBlank()) hls.openLinkFile(link) else hls.handleFile(u.orEmpty())
+                }.onFailure { AppLog.w("hls", "Proxy request failed", it) }.getOrNull()
             } ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "gone")
             return when (result) {
                 is HlsProxy.Result.Playlist -> newFixedLengthResponse(Response.Status.OK, "application/vnd.apple.mpegurl", result.text)
-                is HlsProxy.Result.Binary -> newFixedLengthResponse(
-                    Response.Status.OK, result.contentType, result.bytes.inputStream(), result.bytes.size.toLong(),
-                )
                 is HlsProxy.Result.FileData -> newFixedLengthResponse(
                     Response.Status.OK, result.contentType, result.file.inputStream(), result.file.length(),
                 )
@@ -163,7 +165,7 @@ private object DesktopImages : ImageHost {
                 runCatching {
                     val bytes = URL(url).openStream().use { it.readBytes() }
                     ImageIO.read(ByteArrayInputStream(bytes))?.toComposeImageBitmap()
-                }.getOrNull()
+                }.onFailure { AppLog.w("images", "Could not load image", it) }.getOrNull()
             }?.also { cache[url] = it }
         }
         val bmp = bitmap
@@ -199,7 +201,8 @@ private class DesktopPlayerHost(
                 out[bandwidth] = PlayerResolution(bandwidth, height + "p")
             }
             out.values.toList()
-        }.getOrDefault(emptyList())
+        }.onFailure { AppLog.w("player", "Resolution probe failed", it) }
+            .getOrDefault(emptyList())
     }
 
     @Composable
@@ -383,6 +386,7 @@ private class DesktopUpdateChecker(private val currentVersion: String) : UpdateC
         if (!binary.isFile) return
         prefs.put("dismissed_tag", "v${update.version}")
         runCatching { ProcessBuilder(binary.absolutePath).start() }
+            .onFailure { AppLog.e("update", "Could not restart into the update", it) }
         kotlin.system.exitProcess(0)
     }
 
@@ -406,6 +410,7 @@ fun main() {
         kotlinx.coroutines.delay(20_000)
         while (true) {
             runCatching { Core.playback.probe() }
+                .onFailure { AppLog.w("provider", "Provider health probe failed", it) }
             kotlinx.coroutines.delay(15 * 60_000L)
         }
     }
@@ -428,7 +433,10 @@ fun main() {
                     appVersion = appVersion,
                     updateChecker = DesktopUpdateChecker(appVersion),
                     clearCache = { CacheManager.clear(Core.cacheDir) },
-                    openUrl = { url -> runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(url)) } },
+                    openUrl = { url ->
+                        runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(url)) }
+                            .onFailure { AppLog.w("link", "Could not open $url", it) }
+                    },
                     recents = FileRecentsStore(
                         java.io.File(
                             System.getenv("XDG_DATA_HOME") ?: (System.getProperty("user.home") + "/.local/share"),

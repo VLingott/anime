@@ -209,24 +209,29 @@ class PlaybackService(
                     ),
                 ),
             )
-        }
+        }.onFailure { AppLog.w("playback", "Could not persist play cache for $key", it) }
         return response
     }
 
     fun cachedCapabilities(id: String, season: Int, episode: Int): List<SourceCapability> {
         val key = "$id|${season.coerceAtLeast(1)}|$episode"
         val text = capabilityDisk?.read(key) ?: return emptyList()
-        return runCatching { cacheJson.decodeFromString<CachedCapabilities>(text).sources }.getOrDefault(emptyList())
+        return runCatching { cacheJson.decodeFromString<CachedCapabilities>(text).sources }
+            .onFailure { AppLog.w("playback", "Ignoring unreadable capabilities cache for $key", it) }
+            .getOrDefault(emptyList())
     }
 
     fun cachedResolutions(url: String): List<StreamResolution> {
         val text = resolutionDisk?.read(url) ?: return emptyList()
-        return runCatching { cacheJson.decodeFromString<List<StreamResolution>>(text) }.getOrDefault(emptyList())
+        return runCatching { cacheJson.decodeFromString<List<StreamResolution>>(text) }
+            .onFailure { AppLog.w("playback", "Ignoring unreadable resolution cache", it) }
+            .getOrDefault(emptyList())
     }
 
     fun storeResolutions(url: String, resolutions: List<StreamResolution>) {
         if (resolutions.isEmpty()) return
         runCatching { resolutionDisk?.write(url, cacheJson.encodeToString(resolutions)) }
+            .onFailure { AppLog.w("playback", "Could not persist resolutions", it) }
     }
 
     private fun present(response: PlayResponse): PlayResponse {
@@ -240,7 +245,9 @@ class PlaybackService(
 
     private fun readDisk(key: String): CachedPlay? {
         val text = disk?.read(key) ?: return null
-        return runCatching { cacheJson.decodeFromString<CachedPlay>(text) }.getOrNull()
+        return runCatching { cacheJson.decodeFromString<CachedPlay>(text) }
+            .onFailure { AppLog.w("playback", "Ignoring unreadable play cache for $key", it) }
+            .getOrNull()
     }
 
     /** Resolves a real episode per provider (not just a homepage probe) and records the outcome. */
