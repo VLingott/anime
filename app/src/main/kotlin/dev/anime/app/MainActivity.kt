@@ -387,8 +387,12 @@ private fun runUpdateCheck(context: Context, currentVersion: String) {
             val root = Json.parseToJsonElement(text).jsonObject
             val tag = root["tag_name"]?.jsonPrimitive?.contentOrNull ?: return@launch
             if (!isNewerVersion(currentVersion, tag)) return@launch
-            val asset = root["assets"]?.jsonArray?.mapNotNull { it.jsonObject }
-                ?.firstOrNull { it["name"]?.jsonPrimitive?.contentOrNull?.endsWith(".apk") == true }
+            val versionLabel = tag.removePrefix("v")
+            val apks = root["assets"]?.jsonArray?.mapNotNull { it.jsonObject }
+                ?.filter { it["name"]?.jsonPrimitive?.contentOrNull?.endsWith(".apk") == true }
+                .orEmpty()
+            val asset = apks.firstOrNull { it["name"]?.jsonPrimitive?.contentOrNull?.contains(versionLabel) == true }
+                ?: apks.firstOrNull()
                 ?: return@launch
             val downloadUrl = asset["browser_download_url"]?.jsonPrimitive?.contentOrNull ?: return@launch
             val dir = File(context.cacheDir, "updates").apply { mkdirs() }

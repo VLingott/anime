@@ -31,6 +31,7 @@ TAG="v$VERSION"
 echo "Building Anime $VERSION ($CODE)"
 ./gradlew :app:assembleDebug :desktop:createDistributable
 
+rm -rf dist
 mkdir -p dist
 cp app/build/outputs/apk/debug/app-debug.apk "dist/anime-$VERSION.apk"
 tar -czf "dist/anime-linux-$VERSION.tar.gz" -C desktop/build/compose/binaries/main/app Anime
