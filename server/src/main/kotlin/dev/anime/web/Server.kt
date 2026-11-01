@@ -85,9 +85,10 @@ fun Application.apiModule(
 
         get("/api/play") {
             val id = call.request.queryParameters["id"].orEmpty()
-            val season = call.request.queryParameters["s"]?.toIntOrNull()?.coerceIn(0, 999) ?: 1
+            val season = call.request.queryParameters["s"]?.toIntOrNull()?.coerceIn(0, 9999) ?: 1
             val episode = call.request.queryParameters["e"]?.toIntOrNull() ?: 1
-            val resp = playback.play(id, season, episode)
+            val absolute = call.request.queryParameters["a"]?.toIntOrNull()
+            val resp = playback.play(id, season, episode, absoluteEpisode = absolute)
             if (resp.sources.isEmpty()) call.respond(HttpStatusCode.NotFound, resp) else call.respond(resp)
         }
 

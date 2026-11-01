@@ -8,5 +8,12 @@ interface PlaybackProvider {
     val id: String
     val name: String
     val priority: Int get() = 0
-    suspend fun resolve(detail: DetailResult, season: Int, episode: Int, ctx: SourceContext): List<PlaySource>
+    suspend fun resolve(
+        detail: DetailResult,
+        season: Int,
+        episode: Int,
+        ctx: SourceContext,
+        absoluteEpisode: Int? = null,
+        episodeTitle: String? = null,
+    ): List<PlaySource>
 }

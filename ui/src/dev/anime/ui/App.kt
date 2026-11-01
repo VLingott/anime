@@ -301,6 +301,7 @@ private data class PlayerArgs(
     val cover: String?,
     val score: Double? = null,
     val episodeTitle: String? = null,
+    val absoluteEpisode: Int? = null,
 )
 
 @Composable
@@ -324,8 +325,8 @@ fun App(deps: Deps) {
                     id = selected!!,
                     refreshTick = refreshTick,
                     onBack = { selected = null },
-                    onPlay = { season, ep, label, title, cover, score, episodeTitle ->
-                        player = PlayerArgs(selected!!, season, ep, label, title, cover, score, episodeTitle)
+                    onPlay = { season, ep, label, title, cover, score, episodeTitle, absoluteEpisode ->
+                        player = PlayerArgs(selected!!, season, ep, label, title, cover, score, episodeTitle, absoluteEpisode)
                     },
                     titleLanguage = titleLanguage,
                     onCycleTitleLanguage = {
@@ -369,6 +370,9 @@ fun App(deps: Deps) {
                             cover = recent.cover,
                             score = recent.score,
                             episodeTitle = recent.episodeTitle,
+                            absoluteEpisode = recent.absoluteEpisode ?: deps.core.series.peek(recent.id)?.seasons?.let {
+                                absoluteEpisodeIndex(it, recent.season, recent.episode)
+                            },
                         )
                     },
                 )
@@ -1000,6 +1004,22 @@ private fun SearchRow(deps: Deps, hit: SearchHit, titleLanguage: TitleLanguage, 
     }
 }
 
+private fun absoluteEpisodeIndex(
+    seasons: List<Pair<Int, List<TvmazeEpisode>>>,
+    season: Int,
+    episode: Int,
+): Int? {
+    var index = 0
+    for ((seasonNumber, episodes) in seasons.sortedBy { it.first }) {
+        for (entry in episodes.sortedBy { it.number ?: 0 }) {
+            val number = entry.number ?: continue
+            index++
+            if (seasonNumber == season && number == episode) return index
+        }
+    }
+    return null
+}
+
 private fun displayTitle(d: DetailResult, language: TitleLanguage): String = when (language) {
     TitleLanguage.ROMAJI -> d.title?.romaji ?: d.title?.english ?: d.title?.native ?: "Untitled"
     TitleLanguage.ENGLISH -> d.title?.english ?: d.title?.romaji ?: d.title?.native ?: "Untitled"
@@ -1012,7 +1032,7 @@ private fun DetailScreen(
     id: Long,
     refreshTick: Int,
     onBack: () -> Unit,
-    onPlay: (Int, Int, String, String, String?, Double?, String?) -> Unit,
+    onPlay: (Int, Int, String, String, String?, Double?, String?, Int?) -> Unit,
     titleLanguage: TitleLanguage,
     onCycleTitleLanguage: () -> Unit,
     onGenre: (String) -> Unit,
@@ -1069,7 +1089,16 @@ private fun DetailScreen(
     LaunchedEffect(id, playTarget) {
         val target = playTarget ?: return@LaunchedEffect
         withContext(Dispatchers.IO) {
-            runCatching { deps.core.playback.play(id.toString(), target.first, target.second) }
+            runCatching {
+                deps.core.playback.play(
+                    id.toString(),
+                    target.first,
+                    target.second,
+                    absoluteEpisode = absoluteEpisodeIndex(seasons, target.first, target.second),
+                    episodeTitle = seasons.firstOrNull { it.first == target.first }
+                        ?.second?.firstOrNull { it.number == target.second }?.title,
+                )
+            }
         }
     }
 
@@ -1264,6 +1293,7 @@ private fun DetailScreen(
                                                     d.coverImage,
                                                     d.averageScore,
                                                     ep.title,
+                                                    absoluteEpisodeIndex(seasons, seasonNumber, ep.number ?: 0),
                                                 )
                                             }
                                         }
@@ -1301,6 +1331,7 @@ private fun DetailScreen(
                             d.averageScore,
                             seasons.firstOrNull { it.first == season }
                                 ?.second?.firstOrNull { it.number == episode }?.title,
+                            absoluteEpisodeIndex(seasons, season, episode),
                         )
                     },
                 contentAlignment = Alignment.Center,
@@ -1817,7 +1848,7 @@ private fun PlayerOverlay(
 
     LaunchedEffect(args, resolveAttempt) {
         deps.recents?.record(
-            RecentSeries(args.id, args.title, args.cover, args.score, args.episodeTitle, args.season, args.episode, resumeFrom, 0L),
+            RecentSeries(args.id, args.title, args.cover, args.score, args.episodeTitle, args.season, args.episode, args.absoluteEpisode, resumeFrom, 0L),
         )
         val resp = withContext(Dispatchers.IO) {
             runCatching {
@@ -1826,6 +1857,8 @@ private fun PlayerOverlay(
                     args.season,
                     args.episode,
                     forceRefresh = resolveAttempt > 0,
+                    absoluteEpisode = args.absoluteEpisode,
+                    episodeTitle = args.episodeTitle,
                 )
             }.getOrNull()
         }
@@ -1847,6 +1880,8 @@ private fun PlayerOverlay(
                         args.season,
                         args.episode,
                         forceRefresh = true,
+                        absoluteEpisode = args.absoluteEpisode,
+                        episodeTitle = args.episodeTitle,
                     )
                 }.getOrNull()
             }
@@ -2003,7 +2038,7 @@ private fun PlayerOverlay(
                     onProgress = { pos, dur ->
                         deps.progress.save(args.id, args.season, args.episode, pos, dur)
                         deps.recents?.record(
-                            RecentSeries(args.id, args.title, args.cover, args.score, args.episodeTitle, args.season, args.episode, pos, dur),
+                            RecentSeries(args.id, args.title, args.cover, args.score, args.episodeTitle, args.season, args.episode, args.absoluteEpisode, pos, dur),
                         )
                     },
                     onError = {

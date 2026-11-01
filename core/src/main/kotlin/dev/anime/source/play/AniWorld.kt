@@ -18,6 +18,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.net.URLEncoder
 import java.util.Base64
@@ -29,6 +31,7 @@ class AniWorldProvider : PlaybackProvider {
     override val priority = 10
 
     private val slugCache = ConcurrentHashMap<Long, String>()
+    private val structureCache = ConcurrentHashMap<String, List<SeasonCount>>()
 
     private val junk = listOf("@$", "^^", "~@", "%?", "*~", "!!", "#&")
     private val jsonScript = Regex(
@@ -48,6 +51,8 @@ class AniWorldProvider : PlaybackProvider {
         season: Int,
         episode: Int,
         ctx: SourceContext,
+        absoluteEpisode: Int?,
+        episodeTitle: String?,
     ): List<PlaySource> {
         if (episode < 1) return emptyList()
         val slug = slugFor(detail, ctx) ?: return emptyList()
@@ -55,28 +60,47 @@ class AniWorldProvider : PlaybackProvider {
         val pageSeasons = linkedSetOf<Int>().apply {
             add((season + offset).coerceAtLeast(1))
             add(season.coerceAtLeast(1))
-            if (season > 50) add(1)
-            add(1)
         }.toList()
 
         var byLanguage = LinkedHashMap<Int, MutableList<String>>()
+        var matchedHtml: String? = null
+        var matchedSeason: Int? = null
         for (pageSeason in pageSeasons) {
             val html = fetch("$BASE/anime/stream/$slug/staffel-$pageSeason/episode-$episode", ctx) ?: continue
             val parsed = parseLanguages(html)
             if (parsed.isNotEmpty()) {
                 byLanguage = parsed
+                matchedHtml = html
+                matchedSeason = pageSeason
                 break
+            }
+        }
+
+        if (byLanguage.isEmpty() && absoluteEpisode != null) {
+            val mapped = mapAbsoluteEpisode(slug, absoluteEpisode, ctx)
+            if (mapped != null) {
+                val html = fetch(
+                    "$BASE/anime/stream/$slug/staffel-${mapped.first}/episode-${mapped.second}",
+                    ctx,
+                )
+                if (html != null) {
+                    val parsed = parseLanguages(html)
+                    if (parsed.isNotEmpty()) {
+                        byLanguage = parsed
+                        matchedHtml = html
+                        matchedSeason = mapped.first
+                    }
+                }
             }
         }
         if (byLanguage.isEmpty()) return emptyList()
 
-        var episodeTitleGerman: String? = null
-        var episodeTitleEnglish: String? = null
-        for (pageSeason in pageSeasons) {
-            val html = fetch("$BASE/anime/stream/$slug/staffel-$pageSeason/episode-$episode", ctx) ?: continue
-            episodeTitleGerman = germanTitlePattern.find(html)?.groupValues?.get(1)?.let(::decodeEntities)?.trim()?.takeIf { it.isNotEmpty() }
-            episodeTitleEnglish = englishTitlePattern.find(html)?.groupValues?.get(1)?.let(::decodeEntities)?.trim()?.takeIf { it.isNotEmpty() }
-            if (episodeTitleGerman != null || episodeTitleEnglish != null) break
+        val pageHtml = matchedHtml
+        val episodeTitleGerman = pageHtml?.let {
+            germanTitlePattern.find(it)?.groupValues?.get(1)?.let(::decodeEntities)?.let(::cleanEpisodeTitle)
+        }
+        val episodeTitleEnglish = pageHtml?.let {
+            englishTitlePattern.find(it)?.groupValues?.get(1)?.let(::decodeEntities)?.let(::cleanEpisodeTitle)
         }
 
         for (language in LANGUAGE_ORDER) {
@@ -102,6 +126,50 @@ class AniWorldProvider : PlaybackProvider {
             if (sources.isNotEmpty()) return sources.take(3)
         }
         return emptyList()
+    }
+
+    private data class SeasonCount(val season: Int, val count: Int)
+
+    private suspend fun mapAbsoluteEpisode(slug: String, absolute: Int, ctx: SourceContext): Pair<Int, Int>? {
+        val structure = episodeStructure(slug, ctx)
+        if (structure.isEmpty()) return null
+        var remaining = absolute.coerceAtLeast(1)
+        for (entry in structure) {
+            if (remaining <= entry.count) return entry.season to remaining
+            remaining -= entry.count
+        }
+        val last = structure.last()
+        return last.season to last.count
+    }
+
+    private suspend fun episodeStructure(slug: String, ctx: SourceContext): List<SeasonCount> {
+        structureCache[slug]?.let { return it }
+        val seriesHtml = fetch("$BASE/anime/stream/$slug", ctx) ?: return emptyList()
+        val seasons = Regex("""staffel-(\d+)""").findAll(seriesHtml)
+            .mapNotNull { it.groupValues[1].toIntOrNull() }
+            .distinct()
+            .sorted()
+            .toList()
+        if (seasons.isEmpty()) return emptyList()
+
+        val gate = Semaphore(4)
+        val counts = coroutineScope {
+            seasons.map { season ->
+                async(Dispatchers.IO) {
+                    gate.withPermit {
+                        val html = fetch("$BASE/anime/stream/$slug/staffel-$season", ctx) ?: return@withPermit null
+                        val numbers = Regex("""staffel-$season/episode-(\d+)""")
+                            .findAll(html)
+                            .mapNotNull { it.groupValues[1].toIntOrNull() }
+                            .toList()
+                        val maxEpisode = numbers.maxOrNull()
+                        if (maxEpisode == null) null else SeasonCount(season, maxEpisode)
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+        structureCache[slug] = counts
+        return counts
     }
 
     private fun parseLanguages(html: String): LinkedHashMap<Int, MutableList<String>> {
@@ -272,6 +340,11 @@ class AniWorldProvider : PlaybackProvider {
             header(HttpHeaders.Accept, "text/html,application/xhtml+xml")
         }.bodyAsText()
     }.getOrNull()
+
+    private fun cleanEpisodeTitle(value: String): String? = value
+        .replace(Regex("""\s*\[Episode\s+\d+]\s*$"""), "")
+        .trim()
+        .takeIf { it.isNotEmpty() }
 
     private fun decodeEntities(value: String): String = value
         .replace("&#039;", "'")

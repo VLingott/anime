@@ -25,6 +25,8 @@ class ReAnimeProvider : PlaybackProvider {
         season: Int,
         episode: Int,
         ctx: SourceContext,
+        absoluteEpisode: Int?,
+        episodeTitle: String?,
     ): List<PlaySource> {
         if (episode < 1) return emptyList()
         val slug = slugFor(detail, ctx)

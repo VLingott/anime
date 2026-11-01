@@ -43,7 +43,14 @@ class PlaybackService(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refreshing = ConcurrentHashMap.newKeySet<String>()
 
-    suspend fun play(id: String, season: Int, episode: Int, forceRefresh: Boolean = false): PlayResponse {
+    suspend fun play(
+        id: String,
+        season: Int,
+        episode: Int,
+        forceRefresh: Boolean = false,
+        absoluteEpisode: Int? = null,
+        episodeTitle: String? = null,
+    ): PlayResponse {
         val animeId = id.trim().toLongOrNull()
             ?: return PlayResponse(0, null, season, episode, error = "invalid id")
         if (episode < 1 || episode > 9999) {
@@ -54,19 +61,27 @@ class PlaybackService(
         if (!forceRefresh) {
             val cached = hot[key] ?: readDisk(key)?.also { hot[key] = it }
             if (cached != null) {
-                refreshInBackground(key, animeId, season, episode)
+                refreshInBackground(key, animeId, season, episode, absoluteEpisode, episodeTitle)
                 return cached
             }
         }
 
-        return resolveAndStore(key, animeId, season, episode)
+        return resolveAndStore(key, animeId, season, episode, absoluteEpisode, episodeTitle)
     }
 
-    private fun refreshInBackground(key: String, animeId: Long, season: Int, episode: Int) {
+    private fun refreshInBackground(
+        key: String,
+        animeId: Long,
+        season: Int,
+        episode: Int,
+        absoluteEpisode: Int?,
+        episodeTitle: String?,
+    ) {
+        if (absoluteEpisode == null && episodeTitle == null) return
         if (!refreshing.add(key)) return
         scope.launch {
             try {
-                resolveAndStore(key, animeId, season, episode)
+                resolveAndStore(key, animeId, season, episode, absoluteEpisode, episodeTitle)
             } finally {
                 refreshing.remove(key)
             }
@@ -78,6 +93,8 @@ class PlaybackService(
         animeId: Long,
         season: Int,
         episode: Int,
+        absoluteEpisode: Int? = null,
+        episodeTitle: String? = null,
     ): PlayResponse {
         val detail = details.byId(animeId.toString())
             ?: return PlayResponse(animeId, null, season, episode, error = "title not found")
@@ -88,7 +105,9 @@ class PlaybackService(
             ordered.map { provider ->
                 async(Dispatchers.IO) {
                     val t0 = System.nanoTime()
-                    val result = runCatching { provider.resolve(detail, season, episode, ctx) }
+                    val result = runCatching {
+                        provider.resolve(detail, season, episode, ctx, absoluteEpisode, episodeTitle)
+                    }
                     val sources = result.getOrDefault(emptyList())
                     val error = result.exceptionOrNull()?.message?.take(120)
                         ?: result.exceptionOrNull()?.let { it::class.simpleName }
@@ -150,7 +169,7 @@ class PlaybackService(
             providers.map { provider ->
                 async(Dispatchers.IO) {
                     val t0 = System.nanoTime()
-                    val sources = runCatching { provider.resolve(detail, season, episode, ctx) }
+                    val sources = runCatching { provider.resolve(detail, season, episode, ctx, null, null) }
                     health.record(
                         provider.id,
                         sources.isSuccess && sources.getOrDefault(emptyList()).isNotEmpty(),
