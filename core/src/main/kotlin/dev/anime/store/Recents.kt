@@ -11,6 +11,7 @@ data class RecentSeries(
     val title: String,
     val cover: String? = null,
     val score: Double? = null,
+    val episodeTitle: String? = null,
     val season: Int = 1,
     val episode: Int = 1,
     val positionMs: Long = 0L,

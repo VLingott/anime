@@ -300,6 +300,7 @@ private data class PlayerArgs(
     val title: String,
     val cover: String?,
     val score: Double? = null,
+    val episodeTitle: String? = null,
 )
 
 @Composable
@@ -323,8 +324,8 @@ fun App(deps: Deps) {
                     id = selected!!,
                     refreshTick = refreshTick,
                     onBack = { selected = null },
-                    onPlay = { season, ep, label, title, cover, score ->
-                        player = PlayerArgs(selected!!, season, ep, label, title, cover, score)
+                    onPlay = { season, ep, label, title, cover, score, episodeTitle ->
+                        player = PlayerArgs(selected!!, season, ep, label, title, cover, score, episodeTitle)
                     },
                     titleLanguage = titleLanguage,
                     onCycleTitleLanguage = {
@@ -366,6 +367,7 @@ fun App(deps: Deps) {
                             title = recent.title,
                             cover = recent.cover,
                             score = recent.score,
+                            episodeTitle = recent.episodeTitle,
                         )
                     },
                 )
@@ -1004,7 +1006,7 @@ private fun DetailScreen(
     id: Long,
     refreshTick: Int,
     onBack: () -> Unit,
-    onPlay: (Int, Int, String, String, String?, Double?) -> Unit,
+    onPlay: (Int, Int, String, String, String?, Double?, String?) -> Unit,
     titleLanguage: TitleLanguage,
     onCycleTitleLanguage: () -> Unit,
     onGenre: (String) -> Unit,
@@ -1255,6 +1257,7 @@ private fun DetailScreen(
                                                     displayTitle(d, titleLanguage),
                                                     d.coverImage,
                                                     d.averageScore,
+                                                    ep.title,
                                                 )
                                             }
                                         }
@@ -1290,6 +1293,8 @@ private fun DetailScreen(
                             displayTitle(d, titleLanguage),
                             d.coverImage,
                             d.averageScore,
+                            seasons.firstOrNull { it.first == season }
+                                ?.second?.firstOrNull { it.number == episode }?.title,
                         )
                     },
                 contentAlignment = Alignment.Center,
@@ -1776,7 +1781,7 @@ private fun PlayerOverlay(deps: Deps, args: PlayerArgs, onClose: () -> Unit) {
 
     LaunchedEffect(args, resolveAttempt) {
         deps.recents?.record(
-            RecentSeries(args.id, args.title, args.cover, args.score, args.season, args.episode, resumeFrom, 0L),
+            RecentSeries(args.id, args.title, args.cover, args.score, args.episodeTitle, args.season, args.episode, resumeFrom, 0L),
         )
         val resp = withContext(Dispatchers.IO) {
             runCatching {
@@ -1936,7 +1941,7 @@ private fun PlayerOverlay(deps: Deps, args: PlayerArgs, onClose: () -> Unit) {
                     onProgress = { pos, dur ->
                         deps.progress.save(args.id, args.season, args.episode, pos, dur)
                         deps.recents?.record(
-                            RecentSeries(args.id, args.title, args.cover, args.score, args.season, args.episode, pos, dur),
+                            RecentSeries(args.id, args.title, args.cover, args.score, args.episodeTitle, args.season, args.episode, pos, dur),
                         )
                     },
                     onError = {
@@ -1990,20 +1995,31 @@ private fun PlayerOverlay(deps: Deps, args: PlayerArgs, onClose: () -> Unit) {
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Row(
-                                Modifier.height(44.dp)
+                                Modifier.heightIn(min = 44.dp)
                                     .clip(RoundedCornerShape(16.dp))
                                     .background(Color(0xB30C0C0C))
-                                    .padding(horizontal = 14.dp),
+                                    .padding(horizontal = 14.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(
-                                    args.label,
-                                    color = Color(0xFFF5F5F2),
-                                    fontSize = 13.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.widthIn(max = 520.dp),
-                                )
+                                Column(Modifier.widthIn(max = 520.dp)) {
+                                    Text(
+                                        args.label,
+                                        color = Color(0xFFC9C9C3),
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    val episodeTitle = args.episodeTitle?.takeIf { it.isNotBlank() }
+                                    if (episodeTitle != null) {
+                                        Text(
+                                            episodeTitle,
+                                            color = Color(0xFFF5F5F2),
+                                            fontSize = 13.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
                             }
                             Spacer(Modifier.weight(1f))
                             IconSquareButton(SquareIcon.Close, active = false, background = Color(0xB3151515)) { onClose() }
