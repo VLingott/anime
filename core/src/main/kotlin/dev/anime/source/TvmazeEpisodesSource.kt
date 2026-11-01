@@ -70,12 +70,15 @@ class TvmazeEpisodesSource : StreamSource {
             val anime = shows.filter { it.anime }
             if (anime.isEmpty()) continue
             val target = norm(q)
-            val matched = anime.filter {
+            val exact = anime.filter { norm(it.name) == target }
+            if (exact.isNotEmpty()) return rank(exact).first()
+
+            val contained = anime.filter {
                 val n = norm(it.name)
                 n.isNotEmpty() && target.length >= 4 && n.length >= 4 &&
-                    (n == target || n.contains(target) || target.contains(n))
+                    (n.contains(target) || target.contains(n))
             }
-            rank(matched).firstOrNull()?.let { return it }
+            rank(contained).firstOrNull()?.let { return it }
         }
 
         for ((q, shows) in perName) {
