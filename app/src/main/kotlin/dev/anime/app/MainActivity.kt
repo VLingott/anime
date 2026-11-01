@@ -53,6 +53,7 @@ import dev.anime.ui.CoreHandles
 import dev.anime.ui.Deps
 import dev.anime.ui.ImageHost
 import dev.anime.store.FileRecentsStore
+import dev.anime.util.AppLog
 import dev.anime.ui.PlayerAudioTrack
 import dev.anime.ui.PlayerResolution
 import dev.anime.ui.PlayerHost
@@ -100,6 +101,12 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
+        AppLog.init(java.io.File(filesDir, "anime.log"))
+        val previousCrashHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            AppLog.e("crash", "Uncaught on ${thread.name}", error)
+            previousCrashHandler?.uncaughtException(thread, error)
+        }
         AppCore.init(applicationContext)
         ProgressStore.init(applicationContext)
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO).launch {
@@ -219,7 +226,10 @@ internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
         DisposableEffect(Unit) {
             currentOnSession(session)
             val listener = object : Player.Listener {
-                override fun onPlayerError(error: PlaybackException) = currentOnError(error.message)
+                override fun onPlayerError(error: PlaybackException) {
+                    AppLog.e("player", "ExoPlayer error", error)
+                    currentOnError(error.message)
+                }
 
                 override fun onTracksChanged(tracks: Tracks) = session.refresh()
 
@@ -514,6 +524,7 @@ internal class AndroidUpdateChecker(
                 }
                 stateFlow.value = UpdateUiState(versionLabel, UpdatePhase.READY)
             }.onFailure { error ->
+                AppLog.w("update", "Update check failed", error)
                 stateFlow.value = UpdateUiState(
                     version = "",
                     phase = UpdatePhase.ERROR,

@@ -1,9 +1,13 @@
 package dev.anime.source.play
 
 import dev.anime.model.DetailResult
+import dev.anime.cache.DiskCache
 import dev.anime.model.PlaySource
 import dev.anime.source.SourceContext
 import dev.anime.store.Jsonx
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import java.io.File
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
@@ -25,13 +29,15 @@ import java.net.URLEncoder
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 
-class AniWorldProvider : PlaybackProvider {
+class AniWorldProvider(cacheDir: File? = null) : PlaybackProvider {
     override val id = "aniworld"
     override val name = "AniWorld"
     override val priority = 10
 
     private val slugCache = ConcurrentHashMap<Long, String>()
     private val structureCache = ConcurrentHashMap<String, List<SeasonCount>>()
+    private val structureDisk = cacheDir?.let { DiskCache(File(it, "aniworld-structure"), 1L * 1024 * 1024) }
+    private val structureJson = Json { ignoreUnknownKeys = true }
 
     private val junk = listOf("@$", "^^", "~@", "%?", "*~", "!!", "#&")
     private val jsonScript = Regex(
@@ -128,7 +134,11 @@ class AniWorldProvider : PlaybackProvider {
         return emptyList()
     }
 
+    @Serializable
     private data class SeasonCount(val season: Int, val count: Int)
+
+    @Serializable
+    private data class StructureEntry(val savedAt: Long, val seasons: List<SeasonCount>)
 
     private suspend fun mapAbsoluteEpisode(slug: String, absolute: Int, ctx: SourceContext): Pair<Int, Int>? {
         val structure = episodeStructure(slug, ctx)
@@ -144,6 +154,13 @@ class AniWorldProvider : PlaybackProvider {
 
     private suspend fun episodeStructure(slug: String, ctx: SourceContext): List<SeasonCount> {
         structureCache[slug]?.let { return it }
+        structureDisk?.read(slug)?.let { text ->
+            val entry = runCatching { structureJson.decodeFromString<StructureEntry>(text) }.getOrNull()
+            if (entry != null && System.currentTimeMillis() - entry.savedAt < 24 * 60 * 60_000L) {
+                structureCache[slug] = entry.seasons
+                return entry.seasons
+            }
+        }
         val seriesHtml = fetch("$BASE/anime/stream/$slug", ctx) ?: return emptyList()
         val seasons = Regex("""staffel-(\d+)""").findAll(seriesHtml)
             .mapNotNull { it.groupValues[1].toIntOrNull() }
@@ -169,6 +186,9 @@ class AniWorldProvider : PlaybackProvider {
             }.awaitAll().filterNotNull()
         }
         structureCache[slug] = counts
+        runCatching {
+            structureDisk?.write(slug, structureJson.encodeToString(StructureEntry(System.currentTimeMillis(), counts)))
+        }
         return counts
     }
 

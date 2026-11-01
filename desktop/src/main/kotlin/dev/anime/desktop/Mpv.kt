@@ -10,6 +10,7 @@ import com.sun.jna.Native
 import com.sun.jna.Pointer
 import com.sun.jna.ptr.PointerByReference
 import dev.anime.ui.PlayerAudioTrack
+import dev.anime.util.AppLog
 import dev.anime.ui.PlayerResolution
 import dev.anime.ui.PlayerSession
 import kotlinx.serialization.json.Json
@@ -442,6 +443,7 @@ internal class MpvEngine(
     private fun reportError(message: String) {
         if (closed || errorSent) return
         errorSent = true
+        AppLog.e("mpv", message)
         onError(message)
     }
 

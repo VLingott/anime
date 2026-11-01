@@ -7,6 +7,7 @@ import dev.anime.source.SourceContext
 import dev.anime.source.play.AniWorldProvider
 import dev.anime.source.play.PlaybackProvider
 import dev.anime.source.play.ReAnimeProvider
+import dev.anime.util.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -14,6 +15,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -32,9 +35,9 @@ class PlaybackService(
     private val ctx: SourceContext,
     private val details: Details,
     private val urlTransform: (String) -> String = { it },
-    private val providers: List<PlaybackProvider> = listOf(AniWorldProvider(), ReAnimeProvider()),
-    val health: ProviderHealth = ProviderHealth(),
     cacheDir: File? = null,
+    private val providers: List<PlaybackProvider> = listOf(AniWorldProvider(cacheDir), ReAnimeProvider()),
+    val health: ProviderHealth = ProviderHealth(),
 ) {
     private val hot = ConcurrentHashMap<String, PlayResponse>()
     private val disk = cacheDir?.let { DiskCache(File(it, "play"), PLAY_CACHE_BYTES) }
@@ -42,6 +45,8 @@ class PlaybackService(
     private val cacheJson = Json { ignoreUnknownKeys = true }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refreshing = ConcurrentHashMap.newKeySet<String>()
+    private val locks = ConcurrentHashMap<String, Mutex>()
+    private val lastResolvedAt = ConcurrentHashMap<String, Long>()
 
     suspend fun play(
         id: String,
@@ -66,7 +71,18 @@ class PlaybackService(
             }
         }
 
-        return resolveAndStore(key, animeId, season, episode, absoluteEpisode, episodeTitle)
+        return locks.getOrPut(key) { Mutex() }.withLock {
+            if (!forceRefresh) {
+                val cached = hot[key] ?: readDisk(key)?.also { hot[key] = it }
+                if (cached != null) return@withLock cached
+            } else if (System.currentTimeMillis() - (lastResolvedAt[key] ?: 0L) < 5_000) {
+                val recent = hot[key] ?: readDisk(key)?.also { hot[key] = it }
+                if (recent != null) return@withLock recent
+            }
+            resolveAndStore(key, animeId, season, episode, absoluteEpisode, episodeTitle).also {
+                if (it.sources.isNotEmpty()) lastResolvedAt[key] = System.currentTimeMillis()
+            }
+        }
     }
 
     private fun refreshInBackground(
@@ -81,7 +97,14 @@ class PlaybackService(
         if (!refreshing.add(key)) return
         scope.launch {
             try {
-                resolveAndStore(key, animeId, season, episode, absoluteEpisode, episodeTitle)
+                play(
+                    id = animeId.toString(),
+                    season = season,
+                    episode = episode,
+                    forceRefresh = true,
+                    absoluteEpisode = absoluteEpisode,
+                    episodeTitle = episodeTitle,
+                )
             } finally {
                 refreshing.remove(key)
             }
@@ -112,6 +135,7 @@ class PlaybackService(
                     val error = result.exceptionOrNull()?.message?.take(120)
                         ?: result.exceptionOrNull()?.let { it::class.simpleName }
                     health.record(provider.id, sources.isNotEmpty(), (System.nanoTime() - t0) / 1_000_000, error)
+                    if (sources.isEmpty() && error != null) AppLog.w("provider", provider.id + ": " + error)
                     if (sources.isEmpty() && lastError == null && error != null) lastError = error
                     sources
                 }

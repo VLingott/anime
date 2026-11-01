@@ -9,16 +9,19 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Android audio focus handling.
 - [x] Remove the dev server/web module.
 - [x] Terminal error screen with reason + retry; update error dialog.
-- [ ] Add structured logging + a crash/error log file on Android and desktop. Replace remaining silent `runCatching` paths with contextual logs.
+- [x] Structured log file + uncaught-exception logging on Android and desktop (`anime.log`, 2 MB rotation). Add an in-app log viewer later.
+- [ ] Replace remaining silent `runCatching` paths with contextual logs.
 - [ ] Split play cache into long-lived capabilities (languages/resolutions) and short-lived URLs; validate URLs on use and keep stale entries only as fallback.
 - [x] Single-flight series loads.
-- [ ] Single-flight play/prewarm/revalidation and the 23-season AniWorld structure scan.
+- [x] Single-flight play/prewarm/revalidation (per-key mutex + 5 s dedupe).
+- [x] Persist AniWorld season structure (24 h disk cache).
 - [ ] Add cache schema/version + migration and a cache reset path; persist AniWorld season structure.
 - [x] Unit tests for LRU/disk cache eviction and access ordering.
 - [ ] Add unit tests for parsers, version comparison, absolute episode mapping, and sync merge (when added).
 - [ ] Verify downloaded update APK signature/hash before handing it to the installer; sign release assets with a dedicated key (documented upgrade path).
 - [ ] Android: persist player session across process death; handle audio becoming noisy and focus loss explicitly.
-- [ ] Desktop: bundle libmpv with the tar (or detect and explain missing libmpv); replace fixed proxy port with a free port.
+- [x] Desktop HLS proxy uses a free localhost port.
+- [ ] Desktop: bundle libmpv with the tar (or detect and explain missing libmpv).
 - [ ] Remove fixed localhost HLS proxy if Media3/mpv can consume the custom source directly; otherwise authenticate/lock it down.
 - [ ] Make update checks tolerant of GitHub rate limits and keep a manual “Check for updates” action.
 
@@ -35,7 +38,8 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [ ] Search: recent searches, clear button, result count, keyboard/DPAD focus order.
 - [ ] Accessibility: content descriptions/roles for all Canvas icons, focus states, screen-reader labels, minimum touch targets.
 - [ ] Localization/i18n for UI strings (German first), date/number formatting.
-- [ ] Desktop image cache: disk-backed LRU and byte cap; Android: explicit Coil memory/disk sizes.
+- [x] Desktop image cache capped at 256 bitmaps (LRU).
+- [ ] Desktop image disk cache; Android Coil memory/disk sizes.
 - [x] Update dialog with download progress and install/restart.
 - [ ] Show release notes/download size; add “skip this version”.
 - [ ] Add LICENSE, CONTRIBUTING, issue templates, and a changelog.

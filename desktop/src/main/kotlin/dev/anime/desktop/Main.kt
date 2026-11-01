@@ -28,6 +28,7 @@ import androidx.compose.ui.window.application
 import dev.anime.search.Details
 import dev.anime.search.PlaybackService
 import dev.anime.store.FileRecentsStore
+import dev.anime.util.AppLog
 import dev.anime.source.AniListSource
 import dev.anime.source.SourceContext
 import dev.anime.source.TvmazeEpisodesSource
@@ -60,9 +61,15 @@ import javax.imageio.ImageIO
 
 private const val UA =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-private const val PORT = 18471
+
 
 private object Core {
+    val proxyPort: Int = java.net.ServerSocket(
+        0,
+        0,
+        java.net.InetAddress.getByName("127.0.0.1"),
+    ).use { it.localPort }
+
     val cacheDir: java.io.File = java.io.File(
         System.getenv("XDG_CACHE_HOME") ?: (System.getProperty("user.home") + "/.cache"),
         "anime",
@@ -75,7 +82,7 @@ private object Core {
     val playback: PlaybackService by lazy {
         PlaybackService(
             ctx, details,
-            urlTransform = { url -> "http://127.0.0.1:$PORT$url" },
+            urlTransform = { url -> "http://127.0.0.1:$proxyPort$url" },
             health = dev.anime.search.ProviderHealth(java.io.File(System.getProperty("java.io.tmpdir"), "anime-provider-health.json")),
             cacheDir = cacheDir,
         )
@@ -88,7 +95,7 @@ private object Core {
         proxy = Proxy().also { runCatching { it.start(NanoHTTPD.SOCKET_READ_TIMEOUT, true) } }
     }
 
-    class Proxy : NanoHTTPD("127.0.0.1", PORT) {
+    class Proxy : NanoHTTPD("127.0.0.1", proxyPort) {
         override fun serve(session: IHTTPSession): Response {
             if (!session.uri.startsWith("/api/hls")) return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "not found")
             val u = session.parameters["u"]?.firstOrNull()
@@ -122,7 +129,11 @@ private object DesktopProgress : dev.anime.ui.ProgressStore {
 }
 
 private object DesktopImages : ImageHost {
-    private val cache = ConcurrentHashMap<String, ImageBitmap>()
+    private val cache = java.util.Collections.synchronizedMap(
+        object : LinkedHashMap<String, ImageBitmap>(64, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap>?) = size > 256
+        },
+    )
 
     @Composable
     override fun Image(url: String?, modifier: Modifier, contentScale: ContentScale) {
@@ -363,6 +374,12 @@ private class DesktopUpdateChecker(private val currentVersion: String) : UpdateC
 
 fun main() {
     val appVersion = System.getProperty("anime.version") ?: "1.0.0"
+    AppLog.init(java.io.File(Core.cacheDir, "anime.log"))
+    val previousCrashHandler = Thread.getDefaultUncaughtExceptionHandler()
+    Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+        AppLog.e("crash", "Uncaught on ${thread.name}", error)
+        previousCrashHandler?.uncaughtException(thread, error)
+    }
     Core.startProxy()
     kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
         kotlinx.coroutines.delay(20_000)
