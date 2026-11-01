@@ -15,11 +15,14 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Single-flight series loads.
 - [x] Single-flight play/prewarm/revalidation (per-key mutex + 5 s dedupe).
 - [x] Persist AniWorld season structure (24 h disk cache).
-- [ ] Add cache schema/version + migration and a cache reset path; persist AniWorld season structure.
+- [ ] Add explicit cache schema/version metadata + in-app cache reset (directory version bumps are used ad hoc today).
 - [x] Unit tests for LRU/disk cache eviction and access ordering.
 - [x] Match TVmaze shows by base title, tighten name matching (no unmatched fallback), and select the matching season(s) by episode count/year.
+- [x] Group seasonal search results under the literal base title; base entries show all franchise seasons.
+- [x] Never cache empty TV season lists; retry failed lookups and expose an episodes Retry state.
+- [x] Cache directories versioned for metadata migrations (`series-v5`, `play-v4`).
 - [ ] Add unit tests for parsers, version comparison, absolute episode mapping, and sync merge (when added).
-- [ ] Verify downloaded update APK signature/hash before handing it to the installer; sign release assets with a dedicated key (documented upgrade path).
+- [ ] Sign releases with a dedicated key (documented upgrade path); keep debug signing until then.
 - [ ] Android: persist player session across process death; handle audio becoming noisy and focus loss explicitly.
 - [x] Desktop HLS proxy uses a free localhost port.
 - [ ] Desktop: bundle libmpv with the tar (or detect and explain missing libmpv).
