@@ -62,6 +62,8 @@ import dev.anime.ui.PlayerSession
 import dev.anime.ui.UpdateChecker
 import dev.anime.ui.UpdatePhase
 import dev.anime.ui.UpdateUiState
+import dev.anime.util.GitHubRateLimit
+import dev.anime.util.UpdateCheckGate
 import dev.anime.util.isNewerVersion
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -438,8 +440,32 @@ internal class AndroidUpdateChecker(
     private val stateFlow = MutableStateFlow<UpdateUiState?>(null)
     override val state: StateFlow<UpdateUiState?> = stateFlow
     private val prefs = activity.getSharedPreferences("update-state", Context.MODE_PRIVATE)
+    private val statusFlow = MutableStateFlow<String?>(null)
+    override val status: StateFlow<String?> = statusFlow
+    private val gate = UpdateCheckGate(
+        lastCheckAt = prefs.getLong("last_check_ms", 0L),
+        blockedUntil = prefs.getLong("rate_limited_until_ms", 0L),
+    )
 
-    override fun checkForUpdates() {
+    override fun checkForUpdates(manual: Boolean) {
+        when (val allowed = gate.tryAcquire()) {
+            is UpdateCheckGate.Result.Denied -> {
+                val message = if (allowed.github) {
+                    "GitHub rate limit reached. " + retryText(allowed.retryAt)
+                } else {
+                    "Update checks are limited to once per minute. " + retryText(allowed.retryAt)
+                }
+                statusFlow.value = message
+                stateFlow.value?.let { current ->
+                    if (current.phase == UpdatePhase.ERROR) stateFlow.value = current.copy(error = message)
+                }
+                return
+            }
+            is UpdateCheckGate.Result.Allowed -> {
+                prefs.edit().putLong("last_check_ms", allowed.at).apply()
+            }
+        }
+        statusFlow.value = "Checking for updates…"
         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             runCatching {
                 val connection = URL("https://api.github.com/repos/$UPDATE_REPO/releases/latest").openConnection() as HttpURLConnection
@@ -447,15 +473,35 @@ internal class AndroidUpdateChecker(
                 connection.readTimeout = 8_000
                 connection.setRequestProperty("User-Agent", "Anime/$currentVersion")
                 connection.setRequestProperty("Accept", "application/vnd.github+json")
+                val code = connection.responseCode
+                val now = System.currentTimeMillis()
+                if (code == 403 || code == 429) {
+                    val retryAt = GitHubRateLimit.retryAt(connection, now) ?: (now + 60_000L)
+                    gate.blockUntil(retryAt)
+                    prefs.edit().putLong("rate_limited_until_ms", retryAt).apply()
+                    val message = "GitHub rate limit reached. " + retryText(retryAt)
+                    statusFlow.value = message
+                    if (manual) stateFlow.value = UpdateUiState("", UpdatePhase.ERROR, error = message)
+                    return@launch
+                }
+                if (code !in 200..299) error("GitHub returned HTTP $code")
                 val text = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+                if (connection.getHeaderField("X-RateLimit-Remaining")?.trim()?.toIntOrNull() == 0) {
+                    GitHubRateLimit.retryAt(connection, now)?.let { retryAt ->
+                        gate.blockUntil(retryAt)
+                        prefs.edit().putLong("rate_limited_until_ms", retryAt).apply()
+                    }
+                }
                 val root = Json.parseToJsonElement(text).jsonObject
-                val tag = root["tag_name"]?.jsonPrimitive?.contentOrNull ?: return@launch
+                val tag = root["tag_name"]?.jsonPrimitive?.contentOrNull ?: error("Release has no tag")
                 if (!isNewerVersion(currentVersion, tag)) {
                     prefs.edit().remove("dismissed_tag").remove("attempted_tag").apply()
+                    statusFlow.value = "Anime is up to date."
                     stateFlow.value = null
                     return@launch
                 }
-                if (prefs.getString("dismissed_tag", null) == tag) {
+                if (!manual && prefs.getString("dismissed_tag", null) == tag) {
+                    statusFlow.value = "Anime is up to date."
                     stateFlow.value = null
                     return@launch
                 }
@@ -465,8 +511,9 @@ internal class AndroidUpdateChecker(
                     .orEmpty()
                 val asset = apks.firstOrNull { it["name"]?.jsonPrimitive?.contentOrNull?.contains(versionLabel) == true }
                     ?: apks.firstOrNull()
-                    ?: return@launch
-                val downloadUrl = asset["browser_download_url"]?.jsonPrimitive?.contentOrNull ?: return@launch
+                    ?: error("Release $tag has no APK")
+                val downloadUrl = asset["browser_download_url"]?.jsonPrimitive?.contentOrNull
+                    ?: error("Release $tag has no APK download URL")
                 val dir = File(activity.cacheDir, "updates").apply { mkdirs() }
                 val apk = File(dir, "anime-$versionLabel.apk")
 
@@ -515,6 +562,7 @@ internal class AndroidUpdateChecker(
                 }
                 if (newCode <= currentCode) {
                     prefs.edit().putString("dismissed_tag", tag).apply()
+                    statusFlow.value = "Anime is up to date."
                     stateFlow.value = null
                     return@launch
                 }
@@ -526,6 +574,7 @@ internal class AndroidUpdateChecker(
                 val installedSignatures = installedInfo.signatures?.map { it.toCharsString() }?.toSet().orEmpty()
                 if (archiveSignatures.isNotEmpty() && installedSignatures.isNotEmpty() && archiveSignatures != installedSignatures) {
                     apk.delete()
+                    statusFlow.value = "Update failed."
                     stateFlow.value = UpdateUiState(
                         versionLabel,
                         UpdatePhase.ERROR,
@@ -533,9 +582,11 @@ internal class AndroidUpdateChecker(
                     )
                     return@launch
                 }
+                statusFlow.value = "Update available."
                 stateFlow.value = UpdateUiState(versionLabel, UpdatePhase.READY)
             }.onFailure { error ->
                 AppLog.w("update", "Update check failed", error)
+                statusFlow.value = "Update check failed."
                 stateFlow.value = UpdateUiState(
                     version = "",
                     phase = UpdatePhase.ERROR,
@@ -543,6 +594,11 @@ internal class AndroidUpdateChecker(
                 )
             }
         }
+    }
+
+    private fun retryText(until: Long): String {
+        val seconds = ((until - System.currentTimeMillis()).coerceAtLeast(0L) + 999L) / 1000L
+        return if (seconds >= 60L) "Try again in ${(seconds + 59L) / 60L} min." else "Try again in ${seconds}s."
     }
 
     override fun install() {

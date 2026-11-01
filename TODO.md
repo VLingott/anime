@@ -35,6 +35,7 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 
 ## P1 — product polish
 
+- [x] Settings: manual “Check for updates” with a one-minute client gate and GitHub rate-limit reset handling.
 - [ ] Settings screen: default audio language, title language, cache size/clear, providers, update channel, sync account.
 - [ ] Subtitle track selection (including AniWorld GerSub) and subtitle styling.
 - [ ] Next episode / autoplay after end; “up next” card.
@@ -73,7 +74,6 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 ## Deferred by request
 
 - Dedicated release signing key (debug signing accepted for now).
-- Manual “Check for updates” action and GitHub rate-limit backoff (will be added with the settings screen).
 
 ## Known issues / notes
 

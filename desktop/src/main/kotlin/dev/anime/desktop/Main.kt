@@ -42,6 +42,8 @@ import dev.anime.ui.PlayerHost
 import dev.anime.ui.PlayerResolution
 import dev.anime.ui.PlayerSession
 import dev.anime.ui.UpdateChecker
+import dev.anime.util.GitHubRateLimit
+import dev.anime.util.UpdateCheckGate
 import dev.anime.util.isNewerVersion
 import dev.anime.web.HlsProxy
 import fi.iki.elonen.NanoHTTPD
@@ -291,8 +293,32 @@ private class DesktopUpdateChecker(private val currentVersion: String) : UpdateC
     private val stateFlow = kotlinx.coroutines.flow.MutableStateFlow<dev.anime.ui.UpdateUiState?>(null)
     override val state: kotlinx.coroutines.flow.StateFlow<dev.anime.ui.UpdateUiState?> = stateFlow
     private val prefs = java.util.prefs.Preferences.userRoot().node("dev/anime/desktop/updates")
+    private val statusFlow = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    override val status: kotlinx.coroutines.flow.StateFlow<String?> = statusFlow
+    private val gate = UpdateCheckGate(
+        lastCheckAt = prefs.getLong("last_check_ms", 0L),
+        blockedUntil = prefs.getLong("rate_limited_until_ms", 0L),
+    )
 
-    override fun checkForUpdates() {
+    override fun checkForUpdates(manual: Boolean) {
+        when (val allowed = gate.tryAcquire()) {
+            is UpdateCheckGate.Result.Denied -> {
+                val message = if (allowed.github) {
+                    "GitHub rate limit reached. " + retryText(allowed.retryAt)
+                } else {
+                    "Update checks are limited to once per minute. " + retryText(allowed.retryAt)
+                }
+                statusFlow.value = message
+                stateFlow.value?.let { current ->
+                    if (current.phase == dev.anime.ui.UpdatePhase.ERROR) {
+                        stateFlow.value = current.copy(error = message)
+                    }
+                }
+                return
+            }
+            is UpdateCheckGate.Result.Allowed -> prefs.putLong("last_check_ms", allowed.at)
+        }
+        statusFlow.value = "Checking for updates…"
         Thread {
             runCatching {
                 val connection = java.net.URL("https://api.github.com/repos/$UPDATE_REPO/releases/latest")
@@ -301,15 +327,37 @@ private class DesktopUpdateChecker(private val currentVersion: String) : UpdateC
                 connection.readTimeout = 8_000
                 connection.setRequestProperty("User-Agent", "Anime/$currentVersion")
                 connection.setRequestProperty("Accept", "application/vnd.github+json")
+                val code = connection.responseCode
+                val now = System.currentTimeMillis()
+                if (code == 403 || code == 429) {
+                    val retryAt = GitHubRateLimit.retryAt(connection, now) ?: (now + 60_000L)
+                    gate.blockUntil(retryAt)
+                    prefs.putLong("rate_limited_until_ms", retryAt)
+                    val message = "GitHub rate limit reached. " + retryText(retryAt)
+                    statusFlow.value = message
+                    if (manual) {
+                        stateFlow.value = dev.anime.ui.UpdateUiState("", dev.anime.ui.UpdatePhase.ERROR, error = message)
+                    }
+                    return@runCatching
+                }
+                if (code !in 200..299) error("GitHub returned HTTP $code")
                 val text = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+                if (connection.getHeaderField("X-RateLimit-Remaining")?.trim()?.toIntOrNull() == 0) {
+                    GitHubRateLimit.retryAt(connection, now)?.let { retryAt ->
+                        gate.blockUntil(retryAt)
+                        prefs.putLong("rate_limited_until_ms", retryAt)
+                    }
+                }
                 val root = kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject
-                val tag = root["tag_name"]?.jsonPrimitive?.contentOrNull ?: return@runCatching
+                val tag = root["tag_name"]?.jsonPrimitive?.contentOrNull ?: error("Release has no tag")
                 if (!isNewerVersion(currentVersion, tag)) {
                     prefs.remove("dismissed_tag")
+                    statusFlow.value = "Anime is up to date."
                     stateFlow.value = null
                     return@runCatching
                 }
-                if (prefs.get("dismissed_tag", null) == tag) {
+                if (!manual && prefs.get("dismissed_tag", null) == tag) {
+                    statusFlow.value = "Anime is up to date."
                     stateFlow.value = null
                     return@runCatching
                 }
@@ -317,8 +365,9 @@ private class DesktopUpdateChecker(private val currentVersion: String) : UpdateC
                 val assets = root["assets"]?.let { it as? kotlinx.serialization.json.JsonArray }
                     ?.mapNotNull { it as? kotlinx.serialization.json.JsonObject }.orEmpty()
                 val asset = assets.firstOrNull { it["name"]?.jsonPrimitive?.contentOrNull?.contains("linux") == true }
-                    ?: return@runCatching
-                val url = asset["browser_download_url"]?.jsonPrimitive?.contentOrNull ?: return@runCatching
+                    ?: error("Release $tag has no Linux build")
+                val url = asset["browser_download_url"]?.jsonPrimitive?.contentOrNull
+                    ?: error("Release $tag has no Linux download URL")
                 val dir = java.io.File(
                     System.getenv("XDG_DATA_HOME") ?: (System.getProperty("user.home") + "/.local/share"),
                     "anime/apps/$version",
@@ -363,9 +412,11 @@ private class DesktopUpdateChecker(private val currentVersion: String) : UpdateC
                     if (proc.waitFor() != 0 || !binary.isFile) error("Could not unpack the update")
                     binary.setExecutable(true)
                 }
+                statusFlow.value = "Update available."
                 stateFlow.value = dev.anime.ui.UpdateUiState(version, dev.anime.ui.UpdatePhase.READY)
             }.onFailure { error ->
                 AppLog.w("update", "Desktop update check failed", error)
+                statusFlow.value = "Update check failed."
                 stateFlow.value = dev.anime.ui.UpdateUiState(
                     version = "",
                     phase = dev.anime.ui.UpdatePhase.ERROR,
@@ -373,6 +424,11 @@ private class DesktopUpdateChecker(private val currentVersion: String) : UpdateC
                 )
             }
         }.apply { isDaemon = true; name = "anime-update-check" }.start()
+    }
+
+    private fun retryText(until: Long): String {
+        val seconds = ((until - System.currentTimeMillis()).coerceAtLeast(0L) + 999L) / 1000L
+        return if (seconds >= 60L) "Try again in ${(seconds + 59L) / 60L} min." else "Try again in ${seconds}s."
     }
 
     override fun install() {

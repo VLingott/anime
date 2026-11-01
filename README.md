@@ -37,10 +37,13 @@ Version lives in `version.properties`; tags are `v<version>`.
 
 ## Auto update
 
-Both apps check `https://api.github.com/repos/VLingott/anime/releases/latest` once at launch.
+Both apps check `https://api.github.com/repos/VLingott/anime/releases/latest` at launch and from
+Settings → Check for updates.
 
+- Checks are limited to one per minute per install.
+- A GitHub `403`/`429` rate limit blocks further checks until `X-RateLimit-Reset`.
 - Android: downloads the newest APK and opens the system installer.
-- Linux: opens the release page when a newer version exists.
+- Linux: downloads the tar, unpacks it and restarts into the new build.
 
 The APK must be signed with the same key every release for Android to update in place.
 

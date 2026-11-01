@@ -219,15 +219,18 @@ data class UpdateUiState(
 
 interface UpdateChecker {
     val state: StateFlow<UpdateUiState?>
-    fun checkForUpdates()
+    val status: StateFlow<String?>
+    fun checkForUpdates(manual: Boolean = false)
     fun install()
     fun dismiss()
 }
 
 object NoopUpdateChecker : UpdateChecker {
     private val empty = MutableStateFlow<UpdateUiState?>(null)
+    private val noStatus = MutableStateFlow<String?>(null)
     override val state: StateFlow<UpdateUiState?> = empty
-    override fun checkForUpdates() = Unit
+    override val status: StateFlow<String?> = noStatus
+    override fun checkForUpdates(manual: Boolean) = Unit
     override fun install() = Unit
     override fun dismiss() = Unit
 }
@@ -455,7 +458,7 @@ fun App(deps: Deps) {
         UpdateDialog(
             state = updateState!!,
             onInstall = deps.updateChecker::install,
-            onRetry = deps.updateChecker::checkForUpdates,
+            onRetry = { deps.updateChecker.checkForUpdates(manual = true) },
             onDismiss = deps.updateChecker::dismiss,
         )
     }
@@ -554,6 +557,7 @@ private fun HomeScreen(
     var sort by remember { mutableStateOf(HomeSort.RECENT) }
     var pendingRemoval by remember { mutableStateOf<RecentSeries?>(null) }
     var showSettings by remember { mutableStateOf(false) }
+    val updateStatus by deps.updateChecker.status.collectAsState()
 
     val items = remember(recents, sort, titleLanguage) {
         recents.map { recent ->
@@ -669,10 +673,27 @@ private fun HomeScreen(
                     Text("Settings", color = Color(0xFFF5F5F2), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     Text("Anime ${deps.appVersion}", color = Color(0xFF9B9B96), fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
                     Text(
-                        "Clear cached data",
+                        "Check for updates",
                         color = Color(0xFFF5F5F2),
                         fontSize = 13.sp,
                         modifier = Modifier.padding(top = 18.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color(0xFF151515))
+                            .clickable { deps.updateChecker.checkForUpdates(manual = true) }
+                            .padding(horizontal = 16.dp, vertical = 9.dp),
+                    )
+                    Text(
+                        updateStatus ?: "Update checks are limited to once per minute.",
+                        color = Color(0xFF9B9B96),
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    Text(
+                        "Clear cached data",
+                        color = Color(0xFFF5F5F2),
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(top = 14.dp)
                             .clip(RoundedCornerShape(999.dp))
                             .background(Color(0xFF151515))
                             .clickable {
@@ -2695,30 +2716,16 @@ private fun PlayerControls(
         ?: if (duration > 0) (session.positionMs.toFloat() / duration).coerceIn(0f, 1f) else 0f
     val shownPosition = if (preview != null && duration > 0) (preview!! * duration).toLong() else session.positionMs
 
-    Column(
-        modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    Row(
+        modifier.fillMaxWidth()
+            .padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xB30C0C0C))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xB30C0C0C))
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PlayPauseButton(session.playing) { session.playPause() }
-            Spacer(Modifier.width(12.dp))
-            Text(
-                formatTime(shownPosition) + " / " + formatTime(duration),
-                color = Color(0xFFC9C9C3),
-                fontSize = 11.sp,
-            )
-            Spacer(Modifier.weight(1f))
-            AudioMenuButton(languages, onSelectLanguage)
-            Spacer(Modifier.width(8.dp))
-            ResolutionButton(resolutions, onSelectResolution)
-        }
-
+        PlayPauseButton(session.playing) { session.playPause() }
+        Spacer(Modifier.width(10.dp))
         SeekBar(
             fraction = shownFraction,
             onPreview = { preview = it },
@@ -2726,8 +2733,18 @@ private fun PlayerControls(
                 preview = null
                 if (duration > 0) session.seekTo((it * duration).toLong())
             },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.weight(1f),
         )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            formatTime(shownPosition) + " / " + formatTime(duration),
+            color = Color(0xFFC9C9C3),
+            fontSize = 11.sp,
+        )
+        Spacer(Modifier.width(8.dp))
+        AudioMenuButton(languages, onSelectLanguage)
+        Spacer(Modifier.width(8.dp))
+        ResolutionButton(resolutions, onSelectResolution)
     }
 }
 
