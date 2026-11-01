@@ -40,7 +40,7 @@ class PlaybackService(
     val health: ProviderHealth = ProviderHealth(),
 ) {
     private val hot = ConcurrentHashMap<String, PlayResponse>()
-    private val disk = cacheDir?.let { DiskCache(File(it, "play-v3"), PLAY_CACHE_BYTES) }
+    private val disk = cacheDir?.let { DiskCache(File(it, "play-v4"), PLAY_CACHE_BYTES) }
     private val resolutionDisk = cacheDir?.let { DiskCache(File(it, "resolutions"), 8L * 1024 * 1024) }
     private val cacheJson = Json { ignoreUnknownKeys = true }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

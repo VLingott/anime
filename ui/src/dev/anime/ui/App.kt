@@ -64,6 +64,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -886,10 +887,13 @@ private fun SearchScreen(
         }
     }
 
+    val visibleHits = remember(hits) { groupSearchHits(hits) }
+    val shownCount by rememberUpdatedState(visibleHits.size)
+
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
             .collect { last ->
-                if (!loading && !loadingMore && !endReached && hits.isNotEmpty() && last >= hits.size - 4) {
+                if (!loading && !loadingMore && !endReached && hits.isNotEmpty() && last >= shownCount - 4) {
                     loadingMore = true
                     val next = runCatching { fetch(page) }.getOrDefault(emptyList())
                     val existing = hits.mapNotNull { it.externalId }.toSet()
@@ -993,7 +997,7 @@ private fun SearchScreen(
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(hits, key = { it.externalId ?: it.url }) { hit ->
+            items(visibleHits, key = { it.externalId ?: it.url }) { hit ->
                 SearchRow(deps, hit, titleLanguage) { hit.externalId?.toLongOrNull()?.let(onOpen) }
             }
             if (loadingMore) {
@@ -1327,6 +1331,49 @@ private fun SearchRow(deps: Deps, hit: SearchHit, titleLanguage: TitleLanguage, 
                 )
             }
         }
+    }
+}
+
+private val seasonSuffix = Regex(
+    "(?i)\\s*(:?\\s*)(\\d+(st|nd|rd|th)\\s+season|season\\s+\\d+|part\\s+\\d+|cour\\s+\\d+|ii|iii|iv|v|vi|vii|viii|ix|x)$",
+)
+
+private fun normalizeTitle(value: String): String =
+    value.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()
+
+private fun groupSearchHits(hits: List<SearchHit>): List<SearchHit> {
+    val tvTitles = hits.filter { it.format == "TV" || it.format == "TV_SHORT" }
+        .map { normalizeTitle(it.title) }
+        .toSet()
+    val grouped = LinkedHashMap<String, MutableList<SearchHit>>()
+    val order = ArrayList<String>()
+    for (hit in hits) {
+        val isTv = hit.format == "TV" || hit.format == "TV_SHORT"
+        val normalized = normalizeTitle(hit.title)
+        var key = normalized
+        if (isTv) {
+            var stripped = hit.title
+            while (true) {
+                val next = stripped.replace(seasonSuffix, "").trim()
+                if (next == stripped) break
+                stripped = next
+            }
+            val base = normalizeTitle(stripped)
+            if (base != normalized && base in tvTitles) {
+                key = base
+            } else if (hit.title.contains(':')) {
+                val prefix = normalizeTitle(hit.title.substringBefore(':'))
+                if (prefix in tvTitles) key = prefix
+            }
+        }
+        if (key !in grouped) order += key
+        grouped.getOrPut(key) { mutableListOf() }.add(hit)
+    }
+    return order.map { key ->
+        val list = grouped.getValue(key)
+        list.firstOrNull { normalizeTitle(it.title) == key }
+            ?: list.minByOrNull { it.year ?: 9_999 }
+            ?: list.first()
     }
 }
 

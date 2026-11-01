@@ -31,7 +31,7 @@ class SeriesRepository(
     cacheDir: File? = null,
 ) {
     private val cache = ByteLruCache<Long, SeriesView>(32L * 1024 * 1024, ::weight)
-    private val disk = cacheDir?.let { DiskCache(File(it, "series-v4"), 32L * 1024 * 1024) }
+    private val disk = cacheDir?.let { DiskCache(File(it, "series-v5"), 32L * 1024 * 1024) }
     private val json = Json { ignoreUnknownKeys = true }
     private val locks = java.util.concurrent.ConcurrentHashMap<Long, Mutex>()
 
@@ -89,10 +89,21 @@ class SeriesRepository(
         detail: DetailResult,
         grouped: List<Pair<Int, List<TvmazeEpisode>>>,
     ): List<Pair<Int, List<TvmazeEpisode>>> {
-        val target = detail.episodes ?: return grouped
-        if (grouped.size <= 1 || target <= 0) return grouped
+        if (grouped.size <= 1) return grouped
         if (grouped.size > 12) return grouped
         if (grouped.all { it.first >= 1900 }) return grouped
+
+        val rawTitle = detail.title?.romaji ?: detail.title?.english ?: detail.title?.native
+        val hasSeasonMarker = rawTitle != null && Regex(
+            "(?i)(\\b(\\d+(st|nd|rd|th)\\s+season|season\\s+\\d+|part\\s+\\d+|cour\\s+\\d+)\\b|\\s(ii|iii|iv|v|vi|vii|viii|ix|x)$)",
+        ).containsMatchIn(rawTitle)
+        val format = detail.format?.uppercase()
+        if (!hasSeasonMarker && (format == "TV" || format == "TV_SHORT")) {
+            return grouped
+        }
+
+        val target = detail.episodes ?: return grouped
+        if (target <= 0) return grouped
 
         fun seasonYear(episodes: List<TvmazeEpisode>): Int? = episodes
             .mapNotNull { it.airdate?.take(4)?.toIntOrNull() }
@@ -120,7 +131,6 @@ class SeriesRepository(
             }
         }
 
-        val format = detail.format?.uppercase()
         if (format == "SPECIAL" || format == "OVA" || format == "ONA") {
             return listOf(1 to (1..target).map { n -> TvmazeEpisode(season = 1, number = n) })
         }
