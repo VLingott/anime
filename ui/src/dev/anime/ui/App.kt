@@ -1371,7 +1371,8 @@ private fun groupSearchHits(hits: List<SearchHit>): List<SearchHit> {
     }
     return order.map { key ->
         val list = grouped.getValue(key)
-        list.firstOrNull { normalizeTitle(it.title) == key }
+        list.firstOrNull { it.title.trim().lowercase() == key }
+            ?: list.minByOrNull { it.title.trim().length }
             ?: list.minByOrNull { it.year ?: 9_999 }
             ?: list.first()
     }
