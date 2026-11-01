@@ -386,7 +386,12 @@ private fun runUpdateCheck(context: Context, currentVersion: String) {
             val text = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
             val root = Json.parseToJsonElement(text).jsonObject
             val tag = root["tag_name"]?.jsonPrimitive?.contentOrNull ?: return@launch
-            if (!isNewerVersion(currentVersion, tag)) return@launch
+            val updatePrefs = context.getSharedPreferences("update-state", Context.MODE_PRIVATE)
+            if (!isNewerVersion(currentVersion, tag)) {
+                updatePrefs.edit().remove("attempted_tag").apply()
+                return@launch
+            }
+            if (updatePrefs.getString("attempted_tag", null) == tag) return@launch
             val versionLabel = tag.removePrefix("v")
             val apks = root["assets"]?.jsonArray?.mapNotNull { it.jsonObject }
                 ?.filter { it["name"]?.jsonPrimitive?.contentOrNull?.endsWith(".apk") == true }
@@ -404,7 +409,26 @@ private fun runUpdateCheck(context: Context, currentVersion: String) {
                 download.setRequestProperty("User-Agent", "Anime/$currentVersion")
                 download.inputStream.use { input -> apk.outputStream().use { input.copyTo(it) } }
             }
-            withContext(Dispatchers.Main) { installUpdate(context, apk) }
+            val archive = context.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)
+        val newCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            archive?.longVersionCode ?: 0L
+        } else {
+            @Suppress("DEPRECATION")
+            (archive?.versionCode ?: 0).toLong()
+        }
+        val installed = context.packageManager.getPackageInfo(context.packageName, 0)
+        val currentCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            installed.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            installed.versionCode.toLong()
+        }
+        if (newCode > 0 && newCode <= currentCode) {
+            updatePrefs.edit().putString("attempted_tag", tag).apply()
+            return@launch
+        }
+        updatePrefs.edit().putString("attempted_tag", tag).apply()
+        withContext(Dispatchers.Main) { installUpdate(context, apk) }
         }
     }
 }

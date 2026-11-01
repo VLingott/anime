@@ -37,7 +37,7 @@ class Details(private val ctx: SourceContext) {
               coverImage { extraLarge large color } bannerImage
               studios(isMain: true) { nodes { name } }
               siteUrl trailer { site id }
-              characters(perPage: 8, sort: [ROLE, RELEVANCE]) { edges { role node { name { full } image { large } } } }
+              characters(perPage: 8, sort: [ROLE, RELEVANCE]) { edges { role node { id name { full } image { large } } } }
             } }
         """.trimIndent()
         val body = """{"query":${Jsonx.encodeToString(gql)},"variables":{"id":$id}}"""
@@ -94,7 +94,12 @@ class Details(private val ctx: SourceContext) {
                 characters = media["characters"]?.obj()?.get("edges")?.arr().orEmpty().mapNotNull { edge ->
                     val o = edge.obj() ?: return@mapNotNull null
                     val node = o["node"]?.obj() ?: return@mapNotNull null
-                    DetailCharacter(name = node["name"]?.obj()?.get("full")?.str() ?: return@mapNotNull null, role = o["role"]?.str(), image = node["image"]?.obj()?.get("large")?.str())
+                    DetailCharacter(
+                        id = node["id"]?.str()?.toLongOrNull(),
+                        name = node["name"]?.obj()?.get("full")?.str() ?: return@mapNotNull null,
+                        role = o["role"]?.str(),
+                        image = node["image"]?.obj()?.get("large")?.str(),
+                    )
                 },
             )
         } catch (_: Exception) {

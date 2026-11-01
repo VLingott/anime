@@ -266,7 +266,13 @@ private class DesktopUpdateChecker(private val currentVersion: String) : UpdateC
                 val text = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
                 val root = kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject
                 val tag = root["tag_name"]?.jsonPrimitive?.contentOrNull ?: return@runCatching
-                if (!isNewerVersion(currentVersion, tag)) return@runCatching
+                val prefs = java.util.prefs.Preferences.userRoot().node("dev/anime/desktop/updates")
+                if (!isNewerVersion(currentVersion, tag)) {
+                    prefs.remove("attempted_tag")
+                    return@runCatching
+                }
+                if (prefs.get("attempted_tag", null) == tag) return@runCatching
+                prefs.put("attempted_tag", tag)
                 val page = root["html_url"]?.jsonPrimitive?.contentOrNull ?: return@runCatching
                 java.awt.Desktop.getDesktop().browse(java.net.URI(page))
             }

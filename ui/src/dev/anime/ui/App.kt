@@ -299,6 +299,7 @@ private data class PlayerArgs(
     val label: String,
     val title: String,
     val cover: String?,
+    val score: Double? = null,
 )
 
 @Composable
@@ -322,8 +323,8 @@ fun App(deps: Deps) {
                     id = selected!!,
                     refreshTick = refreshTick,
                     onBack = { selected = null },
-                    onPlay = { season, ep, label, title, cover ->
-                        player = PlayerArgs(selected!!, season, ep, label, title, cover)
+                    onPlay = { season, ep, label, title, cover, score ->
+                        player = PlayerArgs(selected!!, season, ep, label, title, cover, score)
                     },
                     titleLanguage = titleLanguage,
                     onCycleTitleLanguage = {
@@ -363,6 +364,7 @@ fun App(deps: Deps) {
                             label = "${recent.title} — S${recent.season} E${recent.episode}",
                             title = recent.title,
                             cover = recent.cover,
+                            score = recent.score,
                         )
                     },
                 )
@@ -452,12 +454,25 @@ private fun RecentRow(
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        val coverPadding = 4.dp
+        val coverCorner = 10.dp
         Box(Modifier.width(70.dp).aspectRatio(2f / 3f)) {
             deps.images.Image(
                 recent.cover,
-                Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(Color(0xFF151515)),
+                Modifier.fillMaxSize()
+                    .padding(coverPadding)
+                    .clip(RoundedCornerShape(coverCorner))
+                    .background(Color(0xFF151515)),
                 ContentScale.Crop,
             )
+            recent.score?.takeIf { it > 0 }?.let { score ->
+                ImageRatingRing(
+                    score,
+                    imageCorner = coverCorner,
+                    imagePadding = coverPadding,
+                    modifier = Modifier.matchParentSize(),
+                )
+            }
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
@@ -982,7 +997,7 @@ private fun DetailScreen(
     id: Long,
     refreshTick: Int,
     onBack: () -> Unit,
-    onPlay: (Int, Int, String, String, String?) -> Unit,
+    onPlay: (Int, Int, String, String, String?, Double?) -> Unit,
     titleLanguage: TitleLanguage,
     onCycleTitleLanguage: () -> Unit,
     onGenre: (String) -> Unit,
@@ -1168,7 +1183,16 @@ private fun DetailScreen(
                                                 Box(
                                                     Modifier.size(if (wide) 84.dp else 68.dp)
                                                         .clip(RoundedCornerShape(12.dp))
-                                                        .background(Color(0xFF151515)),
+                                                        .background(Color(0xFF151515))
+                                                        .then(
+                                                            if (c.id != null) {
+                                                                Modifier.clickable {
+                                                                    deps.openUrl("https://anilist.co/character/" + c.id)
+                                                                }
+                                                            } else {
+                                                                Modifier
+                                                            },
+                                                        ),
                                                 ) {
                                                     deps.images.Image(c.image, Modifier.fillMaxSize(), ContentScale.Crop)
                                                     Box(
@@ -1223,6 +1247,7 @@ private fun DetailScreen(
                                                     "${displayTitle(d, titleLanguage)} — S$seasonNumber E${ep.number}",
                                                     displayTitle(d, titleLanguage),
                                                     d.coverImage,
+                                                    d.averageScore,
                                                 )
                                             }
                                         }
@@ -1257,6 +1282,7 @@ private fun DetailScreen(
                             label,
                             displayTitle(d, titleLanguage),
                             d.coverImage,
+                            d.averageScore,
                         )
                     },
                 contentAlignment = Alignment.Center,
@@ -1596,7 +1622,7 @@ private fun ImageRatingRing(
         val sweep = (score.coerceIn(0.0, 100.0) / 100.0 * total).toFloat()
         if (sweep <= 0f) return@Canvas
 
-        val start = (total - sweep / 2f) % total
+        val start = ((total - sweep) / 2f) % total
         val drawn = Path()
         val first = minOf(total - start, sweep)
         measure.getSegment(start, start + first, drawn, true)
@@ -1743,7 +1769,7 @@ private fun PlayerOverlay(deps: Deps, args: PlayerArgs, onClose: () -> Unit) {
 
     LaunchedEffect(args, resolveAttempt) {
         deps.recents?.record(
-            RecentSeries(args.id, args.title, args.cover, args.season, args.episode, resumeFrom, 0L),
+            RecentSeries(args.id, args.title, args.cover, args.score, args.season, args.episode, resumeFrom, 0L),
         )
         val resp = withContext(Dispatchers.IO) {
             runCatching {
@@ -1903,7 +1929,7 @@ private fun PlayerOverlay(deps: Deps, args: PlayerArgs, onClose: () -> Unit) {
                     onProgress = { pos, dur ->
                         deps.progress.save(args.id, args.season, args.episode, pos, dur)
                         deps.recents?.record(
-                            RecentSeries(args.id, args.title, args.cover, args.season, args.episode, pos, dur),
+                            RecentSeries(args.id, args.title, args.cover, args.score, args.season, args.episode, pos, dur),
                         )
                     },
                     onError = {

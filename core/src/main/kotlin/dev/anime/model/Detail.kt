@@ -17,6 +17,7 @@ data class DetailTag(
 
 @Serializable
 data class DetailCharacter(
+    val id: Long? = null,
     val name: String,
     val role: String? = null,
     val image: String? = null,
