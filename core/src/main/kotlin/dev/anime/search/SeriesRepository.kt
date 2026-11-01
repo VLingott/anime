@@ -31,7 +31,7 @@ class SeriesRepository(
     cacheDir: File? = null,
 ) {
     private val cache = ByteLruCache<Long, SeriesView>(32L * 1024 * 1024, ::weight)
-    private val disk = cacheDir?.let { DiskCache(File(it, "series"), 32L * 1024 * 1024) }
+    private val disk = cacheDir?.let { DiskCache(File(it, "series-v2"), 32L * 1024 * 1024) }
     private val json = Json { ignoreUnknownKeys = true }
     private val locks = java.util.concurrent.ConcurrentHashMap<Long, Mutex>()
 
