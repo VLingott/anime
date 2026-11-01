@@ -21,7 +21,7 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Match TVmaze shows by base title, tighten name matching (no unmatched fallback), and select the matching season(s) by episode count/year.
 - [x] Group seasonal search results under the literal base title; base entries show all franchise seasons.
 - [x] Never cache empty TV season lists; retry failed lookups and expose an episodes Retry state.
-- [x] Cache directories versioned for metadata migrations (`series-v5`, `play-v4`).
+- [x] Cache directories versioned for metadata migrations (`series-v5`, `play-v6`).
 - [x] Unit tests for version comparison, title/season parsing, absolute episode mapping, cache eviction and disk trim.
 
 - [x] Android: player screen state survives process death via saved state; audio focus + becoming-noisy handling enabled.
