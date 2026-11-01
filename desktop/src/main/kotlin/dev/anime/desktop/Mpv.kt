@@ -89,7 +89,7 @@ internal class MpvEngine(
     private val widgetHeight: Int,
     private val onFrame: (Image) -> Unit,
     private val onProgress: (Long, Long) -> Unit,
-    private val onError: () -> Unit,
+    private val onError: (String) -> Unit,
     private val onEnded: () -> Unit,
 ) : AutoCloseable, PlayerSession {
 
@@ -209,7 +209,6 @@ internal class MpvEngine(
         strings.forEachIndexed { i, ptr -> mem.setPointer(Native.POINTER_SIZE.toLong() * i, ptr) }
         mem.setPointer(Native.POINTER_SIZE.toLong() * strings.size, null)
         val rc = lib.mpv_command(handle, mem)
-        if (rc < 0) println("[mpv] command failed (" + args.firstOrNull() + "): " + lib.mpv_error_string(rc))
         return rc
     }
 
@@ -443,8 +442,7 @@ internal class MpvEngine(
     private fun reportError(message: String) {
         if (closed || errorSent) return
         errorSent = true
-        println("[mpv] " + message)
-        onError()
+        onError(message)
     }
 
     override fun playPause() {

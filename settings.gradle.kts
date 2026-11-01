@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "anime"
-include(":core", ":server", ":app", ":desktop")
+include(":core", ":app", ":desktop")

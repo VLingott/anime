@@ -123,6 +123,8 @@ import dev.anime.source.AniListSource
 import dev.anime.source.TvmazeEpisode
 import dev.anime.source.TvmazeEpisodesSource
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -194,19 +196,35 @@ interface PlayerHost {
         url: String,
         resumeMs: Long,
         onProgress: (positionMs: Long, durationMs: Long) -> Unit,
-        onError: () -> Unit,
+        onError: (reason: String?) -> Unit,
         onSession: (PlayerSession?) -> Unit = {},
     )
 
     suspend fun probeResolutions(url: String): List<PlayerResolution> = emptyList()
 }
 
+enum class UpdatePhase { CHECKING, DOWNLOADING, READY, ERROR }
+
+data class UpdateUiState(
+    val version: String,
+    val phase: UpdatePhase,
+    val progress: Float? = null,
+    val error: String? = null,
+)
+
 interface UpdateChecker {
+    val state: StateFlow<UpdateUiState?>
     fun checkForUpdates()
+    fun install()
+    fun dismiss()
 }
 
 object NoopUpdateChecker : UpdateChecker {
+    private val empty = MutableStateFlow<UpdateUiState?>(null)
+    override val state: StateFlow<UpdateUiState?> = empty
     override fun checkForUpdates() = Unit
+    override fun install() = Unit
+    override fun dismiss() = Unit
 }
 
 fun isNewerVersion(current: String, latest: String): Boolean {
@@ -305,14 +323,119 @@ private data class PlayerArgs(
 )
 
 @Composable
+private fun UpdateDialog(
+    state: UpdateUiState,
+    onInstall: () -> Unit,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = Color(0xFF0C0C0C),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Text(
+                    when (state.phase) {
+                        UpdatePhase.CHECKING -> "Checking for updates…"
+                        UpdatePhase.DOWNLOADING -> "Downloading update…"
+                        UpdatePhase.READY -> "Update ready"
+                        UpdatePhase.ERROR -> "Update failed"
+                    },
+                    color = Color(0xFFF5F5F2),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "Version ${state.version}",
+                    color = Color(0xFF9B9B96),
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                when (state.phase) {
+                    UpdatePhase.DOWNLOADING -> {
+                        Box(
+                            Modifier.fillMaxWidth().padding(top = 14.dp).height(4.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color.White.copy(alpha = 0.15f)),
+                        ) {
+                            val progress = state.progress
+                            if (progress != null) {
+                                Box(
+                                    Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).height(4.dp)
+                                        .background(Color(0xFFF5F5F2)),
+                                )
+                            }
+                        }
+                    }
+                    UpdatePhase.ERROR -> {
+                        state.error?.let {
+                            Text(it, color = Color(0xFFF0A0A0), fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp))
+                        }
+                    }
+                    else -> Unit
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 18.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (state.phase == UpdatePhase.READY) "Later" else "Dismiss",
+                        color = Color(0xFF9B9B96),
+                        fontSize = 13.sp,
+                        modifier = Modifier.clickable { onDismiss() }.padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                    when (state.phase) {
+                        UpdatePhase.READY -> Text(
+                            "Install",
+                            color = Color(0xFF0A0A0A),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 8.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color(0xFFF5F5F2))
+                                .clickable { onInstall() }
+                                .padding(horizontal = 18.dp, vertical = 9.dp),
+                        )
+                        UpdatePhase.ERROR -> Text(
+                            "Retry",
+                            color = Color(0xFFF5F5F2),
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(start = 8.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color(0xFF151515))
+                                .clickable { onRetry() }
+                                .padding(horizontal = 18.dp, vertical = 9.dp),
+                        )
+                        else -> Unit
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun App(deps: Deps) {
     LaunchedEffect(Unit) { deps.updateChecker.checkForUpdates() }
+    val updateState by deps.updateChecker.state.collectAsState()
     var filters by remember { mutableStateOf(SearchFilters()) }
     var selected by remember { mutableStateOf<Long?>(null) }
     var player by remember { mutableStateOf<PlayerArgs?>(null) }
     var refreshTick by remember { mutableIntStateOf(0) }
     var searchMode by remember { mutableStateOf(false) }
     var titleLanguage by remember { mutableStateOf(TitleLanguage.entries.getOrElse(deps.progress.titleLanguage()) { TitleLanguage.ROMAJI }) }
+
+    if (updateState != null) {
+        UpdateDialog(
+            state = updateState!!,
+            onInstall = deps.updateChecker::install,
+            onRetry = deps.updateChecker::checkForUpdates,
+            onDismiss = deps.updateChecker::dismiss,
+        )
+    }
 
     MaterialTheme(colorScheme = Colors) {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
@@ -381,6 +504,20 @@ fun App(deps: Deps) {
     }
 }
 
+private enum class HomeSort(val label: String) {
+    RECENT("Recently watched"),
+    TITLE("Title"),
+    RATING("Rating"),
+}
+
+private data class RecentEntry(
+    val recent: RecentSeries,
+    val title: String,
+    val score: Double?,
+    val newEpisodes: Boolean,
+    val fullyWatched: Boolean,
+)
+
 @Composable
 private fun HomeScreen(
     deps: Deps,
@@ -390,17 +527,54 @@ private fun HomeScreen(
     onResume: (RecentSeries) -> Unit,
 ) {
     val recents = remember(refreshTick) { deps.recents?.list().orEmpty() }
+    var sort by remember { mutableStateOf(HomeSort.RECENT) }
+
+    val items = remember(recents, sort, titleLanguage) {
+        recents.map { recent ->
+            val cachedView = deps.core.series.peek(recent.id)
+            val detail = cachedView?.detail
+            val seasons = cachedView?.seasons
+            val title = detail?.let { displayTitle(it, titleLanguage) } ?: recent.title
+            val fraction = deps.progress.fraction(recent.id, recent.season, recent.episode)
+                ?: recent.positionMs.toFloat().div(recent.durationMs.toFloat()).takeIf { recent.durationMs > 0 }
+            val total = seasons?.sumOf { (_, episodes) -> episodes.count { it.number != null } } ?: 0
+            val watched = recent.absoluteEpisode
+                ?: seasons?.let { absoluteEpisodeIndex(it, recent.season, recent.episode) }
+            val fullyWatched = total > 0 && watched == total && (fraction ?: 0f) >= 0.95f
+            val newEpisodes = total > 0 && watched != null && total > watched
+            RecentEntry(
+                recent = recent,
+                title = title,
+                score = recent.score ?: detail?.averageScore,
+                newEpisodes = newEpisodes,
+                fullyWatched = fullyWatched,
+            )
+        }.sortedWith(
+            when (sort) {
+                HomeSort.RECENT -> compareBy<RecentEntry> { it.fullyWatched }
+                    .thenByDescending { it.recent.updatedAt }
+                HomeSort.TITLE -> compareBy<RecentEntry> { it.fullyWatched }
+                    .thenBy { it.title.lowercase() }
+                HomeSort.RATING -> compareBy<RecentEntry> { it.fullyWatched }
+                    .thenByDescending { it.score ?: -1.0 }
+            },
+        )
+    }
 
     Column(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding()) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp).height(44.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .background(Color(0xFF151515))
-                .border(1.dp, Color(0xFF232323), RoundedCornerShape(999.dp))
-                .clickable { onSearch() }
-                .padding(horizontal = 16.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Row(
+                Modifier.weight(1f).height(44.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color(0xFF151515))
+                    .border(1.dp, Color(0xFF232323), RoundedCornerShape(999.dp))
+                    .clickable { onSearch() }
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
             Canvas(Modifier.size(15.dp)) {
                 val color = Color(0xFF9B9B96)
                 val stroke = 1.7.dp.toPx()
@@ -413,8 +587,11 @@ private fun HomeScreen(
                     StrokeCap.Round,
                 )
             }
-            Spacer(Modifier.width(10.dp))
-            Text("Search anime…", color = Color(0xFF9B9B96), fontSize = 14.sp)
+                Spacer(Modifier.width(10.dp))
+                Text("Search anime…", color = Color(0xFF9B9B96), fontSize = 14.sp)
+            }
+            Spacer(Modifier.width(8.dp))
+            HomeSortButton(sort) { sort = it }
         }
 
         LazyColumn(
@@ -438,9 +615,41 @@ private fun HomeScreen(
                     }
                 }
             } else {
-                items(recents, key = { it.id }) { recent ->
-                    RecentRow(deps, recent, titleLanguage, onResume)
+                items(items, key = { it.recent.id }) { entry ->
+                    RecentRow(
+                        deps = deps,
+                        recent = entry.recent,
+                        titleLanguage = titleLanguage,
+                        newEpisodes = entry.newEpisodes,
+                        fullyWatched = entry.fullyWatched,
+                        onResume = onResume,
+                    )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeSortButton(current: HomeSort, onSelect: (HomeSort) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconSquareButton(SquareIcon.Sort, active = current != HomeSort.RECENT) { open = true }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            HomeSort.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            option.label,
+                            color = if (option == current) Color(0xFFF5F5F2) else Color(0xFFC9C9C3),
+                            fontSize = 12.sp,
+                        )
+                    },
+                    onClick = {
+                        open = false
+                        onSelect(option)
+                    },
+                )
             }
         }
     }
@@ -451,6 +660,8 @@ private fun RecentRow(
     deps: Deps,
     recent: RecentSeries,
     titleLanguage: TitleLanguage,
+    newEpisodes: Boolean,
+    fullyWatched: Boolean,
     onResume: (RecentSeries) -> Unit,
 ) {
     val cachedDetail = remember(recent.id) { deps.core.series.peek(recent.id)?.detail }
@@ -498,12 +709,26 @@ private fun RecentRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                "S${recent.season} E${recent.episode}",
-                color = Color(0xFF9B9B96),
-                fontSize = 12.sp,
-                modifier = Modifier.padding(top = 2.dp),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                Text(
+                    "S${recent.season} E${recent.episode}",
+                    color = Color(0xFF9B9B96),
+                    fontSize = 12.sp,
+                )
+                if (newEpisodes && !fullyWatched) {
+                    Text(
+                        "NEW",
+                        color = Color(0xFF0A0A0A),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.8.sp,
+                        modifier = Modifier.padding(start = 8.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color(0xFFF5F5F2))
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                    )
+                }
+            }
             if (fraction != null) {
                 Box(
                     Modifier.fillMaxWidth().padding(top = 8.dp).height(3.dp)
@@ -1569,23 +1794,6 @@ private fun MetaLine(
 }
 
 @Composable
-private fun MetaChip(text: String, fontSize: androidx.compose.ui.unit.TextUnit = 13.sp, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    Text(
-        text,
-        color = if (hovered) Color(0xFFFFFFFF) else Color(0xFFE3E3DD),
-        fontSize = fontSize,
-        maxLines = 1,
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .hoverable(interaction)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .padding(horizontal = 1.dp, vertical = 2.dp),
-    )
-}
-
-@Composable
 private fun Modifier.scrollFades(state: LazyListState): Modifier {
     val left = state.canScrollBackward
     val right = state.canScrollForward
@@ -1810,6 +2018,7 @@ private fun PlayerOverlay(
     var refreshedOnce by remember(args) { mutableStateOf(false) }
     var probedResolutions by remember(args) { mutableStateOf<Map<String, List<PlayerResolution>>>(emptyMap()) }
     var pendingResolution by remember(args) { mutableStateOf<String?>(null) }
+    var playerError by remember(args) { mutableStateOf<String?>(null) }
     val focus = remember { FocusRequester() }
 
     val headerDetail = remember(args.id) { deps.core.series.peek(args.id)?.detail }
@@ -1996,12 +2205,39 @@ private fun PlayerOverlay(
     ) {
         val source = sources.getOrNull(index)
         if (failed || source == null) {
-            Text(
-                status,
-                color = Color(0xFF9B9B96),
-                fontSize = 13.sp,
-                modifier = Modifier.align(Alignment.Center).padding(24.dp),
-            )
+            Column(
+                Modifier.align(Alignment.Center).padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text("Couldn't play this episode", color = Color(0xFFF5F5F2), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                val detail = playerError ?: status.takeIf { it.isNotBlank() }
+                if (detail != null) {
+                    Text(
+                        detail,
+                        color = Color(0xFF9B9B96),
+                        fontSize = 12.sp,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+                Text(
+                    "Retry",
+                    color = Color(0xFFF5F5F2),
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 16.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Color(0xFF151515))
+                        .clickable {
+                            playerError = null
+                            failed = false
+                            refreshedOnce = false
+                            status = ""
+                            resolveAttempt += 1
+                        }
+                        .padding(horizontal = 18.dp, vertical = 9.dp),
+                )
+            }
         } else {
             Box(
                 Modifier.fillMaxSize()
@@ -2041,7 +2277,8 @@ private fun PlayerOverlay(
                             RecentSeries(args.id, args.title, args.cover, args.score, args.episodeTitle, args.season, args.episode, args.absoluteEpisode, pos, dur),
                         )
                     },
-                    onError = {
+                    onError = { reason ->
+                        playerError = reason
                         val active = session
                         val resumeAt = active?.positionMs ?: resumeFrom
                         val preferred = deps.progress.audioPreference(args.id)

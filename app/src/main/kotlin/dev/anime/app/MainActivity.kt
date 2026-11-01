@@ -2,10 +2,12 @@ package dev.anime.app
 
 import android.app.Activity
 import android.content.Context
+import android.app.PictureInPictureParams
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.widget.Toast
 import android.net.Uri
+import android.util.Rational
 import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
@@ -27,6 +29,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -55,7 +58,11 @@ import dev.anime.ui.PlayerResolution
 import dev.anime.ui.PlayerHost
 import dev.anime.ui.PlayerSession
 import dev.anime.ui.UpdateChecker
+import dev.anime.ui.UpdatePhase
+import dev.anime.ui.UpdateUiState
 import dev.anime.ui.isNewerVersion
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -70,6 +77,23 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 class MainActivity : ComponentActivity() {
+    private val playerHost by lazy { AndroidPlayerHost(this) }
+
+    internal fun playerHostForDeps(): AndroidPlayerHost = playerHost
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && playerHost.isActive && !isInPictureInPictureMode) {
+            runCatching {
+                enterPictureInPictureMode(
+                    PictureInPictureParams.Builder()
+                        .setAspectRatio(Rational(16, 9))
+                        .build(),
+                )
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
@@ -86,11 +110,10 @@ class MainActivity : ComponentActivity() {
             }
         }
         setContent { App(androidDeps(this)) }
-        runUpdateCheck(applicationContext, BuildConfig.VERSION_NAME)
     }
 }
 
-private fun androidDeps(activity: Activity): Deps = Deps(
+private fun androidDeps(activity: MainActivity): Deps = Deps(
     core = CoreHandles(
         ctx = AppCore.ctx,
         aniList = AppCore.aniList,
@@ -99,16 +122,14 @@ private fun androidDeps(activity: Activity): Deps = Deps(
         playback = AppCore.playback,
         cacheDir = java.io.File(activity.filesDir, "anime-cache"),
     ),
-    player = AndroidPlayerHost(activity),
+    player = activity.playerHostForDeps(),
     images = AndroidImages,
     progress = ProgressStore,
     openUrl = { url -> runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } },
     back = AndroidBackHost,
     recents = FileRecentsStore(java.io.File(activity.filesDir, "recents.json")),
     appVersion = BuildConfig.VERSION_NAME,
-    updateChecker = object : UpdateChecker {
-        override fun checkForUpdates() = runUpdateCheck(activity.applicationContext, BuildConfig.VERSION_NAME)
-    },
+    updateChecker = AndroidUpdateChecker(activity, BuildConfig.VERSION_NAME),
 )
 
 private object AndroidBackHost : BackHost {
@@ -125,13 +146,18 @@ private object AndroidImages : ImageHost {
     }
 }
 
-private class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
+internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
+    var isActive: Boolean = false
+        private set
+
     override fun onScreenShown() {
+        isActive = true
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         insets().hide(WindowInsetsCompat.Type.statusBars())
     }
 
     override fun onScreenHidden() {
+        isActive = false
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         setFullscreen(false)
         insets().show(WindowInsetsCompat.Type.systemBars())
@@ -164,14 +190,24 @@ private class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
         url: String,
         resumeMs: Long,
         onProgress: (Long, Long) -> Unit,
-        onError: () -> Unit,
+        onError: (String?) -> Unit,
         onSession: (PlayerSession?) -> Unit,
     ) {
         val context = LocalContext.current
         val currentOnError by rememberUpdatedState(onError)
         val currentOnProgress by rememberUpdatedState(onProgress)
         val currentOnSession by rememberUpdatedState(onSession)
-        val player = remember { ExoPlayer.Builder(context).build() }
+        val player = remember {
+            ExoPlayer.Builder(context)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(),
+                    true,
+                )
+                .build()
+        }
         val session = remember(player) { AndroidSession(player) }
         val mediaSession = remember(player) { MediaSession.Builder(context, player).build() }
         val view = LocalView.current
@@ -183,7 +219,7 @@ private class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
         DisposableEffect(Unit) {
             currentOnSession(session)
             val listener = object : Player.Listener {
-                override fun onPlayerError(error: PlaybackException) = currentOnError()
+                override fun onPlayerError(error: PlaybackException) = currentOnError(error.message)
 
                 override fun onTracksChanged(tracks: Tracks) = session.refresh()
 
@@ -374,61 +410,119 @@ private fun parseResolutions(text: String): List<PlayerResolution> {
 
 private const val UPDATE_REPO = "VLingott/anime"
 
-private fun runUpdateCheck(context: Context, currentVersion: String) {
-    kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-        runCatching {
-            val connection = URL("https://api.github.com/repos/$UPDATE_REPO/releases/latest").openConnection() as HttpURLConnection
-            connection.connectTimeout = 6_000
-            connection.readTimeout = 8_000
-            connection.setRequestProperty("User-Agent", "Anime/$currentVersion")
-            connection.setRequestProperty("Accept", "application/vnd.github+json")
-            val text = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
-            val root = Json.parseToJsonElement(text).jsonObject
-            val tag = root["tag_name"]?.jsonPrimitive?.contentOrNull ?: return@launch
-            val updatePrefs = context.getSharedPreferences("update-state", Context.MODE_PRIVATE)
-            if (!isNewerVersion(currentVersion, tag)) {
-                updatePrefs.edit().remove("attempted_tag").apply()
-                return@launch
+internal class AndroidUpdateChecker(
+    private val activity: MainActivity,
+    private val currentVersion: String,
+) : UpdateChecker {
+    private val stateFlow = MutableStateFlow<UpdateUiState?>(null)
+    override val state: StateFlow<UpdateUiState?> = stateFlow
+    private val prefs = activity.getSharedPreferences("update-state", Context.MODE_PRIVATE)
+
+    override fun checkForUpdates() {
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                val connection = URL("https://api.github.com/repos/$UPDATE_REPO/releases/latest").openConnection() as HttpURLConnection
+                connection.connectTimeout = 6_000
+                connection.readTimeout = 8_000
+                connection.setRequestProperty("User-Agent", "Anime/$currentVersion")
+                connection.setRequestProperty("Accept", "application/vnd.github+json")
+                val text = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+                val root = Json.parseToJsonElement(text).jsonObject
+                val tag = root["tag_name"]?.jsonPrimitive?.contentOrNull ?: return@launch
+                if (!isNewerVersion(currentVersion, tag)) {
+                    prefs.edit().remove("dismissed_tag").remove("attempted_tag").apply()
+                    stateFlow.value = null
+                    return@launch
+                }
+                if (prefs.getString("dismissed_tag", null) == tag) {
+                    stateFlow.value = null
+                    return@launch
+                }
+                val versionLabel = tag.removePrefix("v")
+                val apks = root["assets"]?.jsonArray?.mapNotNull { it.jsonObject }
+                    ?.filter { it["name"]?.jsonPrimitive?.contentOrNull?.endsWith(".apk") == true }
+                    .orEmpty()
+                val asset = apks.firstOrNull { it["name"]?.jsonPrimitive?.contentOrNull?.contains(versionLabel) == true }
+                    ?: apks.firstOrNull()
+                    ?: return@launch
+                val downloadUrl = asset["browser_download_url"]?.jsonPrimitive?.contentOrNull ?: return@launch
+                val dir = File(activity.cacheDir, "updates").apply { mkdirs() }
+                val apk = File(dir, "anime-$versionLabel.apk")
+
+                if (!apk.isFile || apk.length() == 0L) {
+                    stateFlow.value = UpdateUiState(versionLabel, UpdatePhase.DOWNLOADING)
+                    val download = URL(downloadUrl).openConnection() as HttpURLConnection
+                    download.connectTimeout = 10_000
+                    download.readTimeout = 30_000
+                    download.setRequestProperty("User-Agent", "Anime/$currentVersion")
+                    val total = download.contentLengthLong
+                    download.inputStream.use { input ->
+                        apk.outputStream().use { output ->
+                            val buffer = ByteArray(64 * 1024)
+                            var copied = 0L
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read <= 0) break
+                                output.write(buffer, 0, read)
+                                copied += read
+                                if (total > 0) {
+                                    stateFlow.value = UpdateUiState(
+                                        versionLabel,
+                                        UpdatePhase.DOWNLOADING,
+                                        progress = copied.toFloat() / total,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                val archive = activity.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)
+                val newCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    archive?.longVersionCode ?: 0L
+                } else {
+                    @Suppress("DEPRECATION")
+                    (archive?.versionCode ?: 0).toLong()
+                }
+                val installed = activity.packageManager.getPackageInfo(activity.packageName, 0)
+                val currentCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    installed.longVersionCode
+                } else {
+                    @Suppress("DEPRECATION")
+                    installed.versionCode.toLong()
+                }
+                if (newCode <= currentCode) {
+                    prefs.edit().putString("dismissed_tag", tag).apply()
+                    stateFlow.value = null
+                    return@launch
+                }
+                stateFlow.value = UpdateUiState(versionLabel, UpdatePhase.READY)
+            }.onFailure { error ->
+                stateFlow.value = UpdateUiState(
+                    version = "",
+                    phase = UpdatePhase.ERROR,
+                    error = error.message ?: "Could not check for updates.",
+                )
             }
-            if (updatePrefs.getString("attempted_tag", null) == tag) return@launch
-            val versionLabel = tag.removePrefix("v")
-            val apks = root["assets"]?.jsonArray?.mapNotNull { it.jsonObject }
-                ?.filter { it["name"]?.jsonPrimitive?.contentOrNull?.endsWith(".apk") == true }
-                .orEmpty()
-            val asset = apks.firstOrNull { it["name"]?.jsonPrimitive?.contentOrNull?.contains(versionLabel) == true }
-                ?: apks.firstOrNull()
-                ?: return@launch
-            val downloadUrl = asset["browser_download_url"]?.jsonPrimitive?.contentOrNull ?: return@launch
-            val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-            val apk = File(dir, "anime-$tag.apk")
-            if (!apk.isFile || apk.length() == 0L) {
-                val download = URL(downloadUrl).openConnection() as HttpURLConnection
-                download.connectTimeout = 10_000
-                download.readTimeout = 30_000
-                download.setRequestProperty("User-Agent", "Anime/$currentVersion")
-                download.inputStream.use { input -> apk.outputStream().use { input.copyTo(it) } }
-            }
-            val archive = context.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)
-        val newCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            archive?.longVersionCode ?: 0L
-        } else {
-            @Suppress("DEPRECATION")
-            (archive?.versionCode ?: 0).toLong()
         }
-        val installed = context.packageManager.getPackageInfo(context.packageName, 0)
-        val currentCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            installed.longVersionCode
-        } else {
-            @Suppress("DEPRECATION")
-            installed.versionCode.toLong()
+    }
+
+    override fun install() {
+        val update = stateFlow.value ?: return
+        if (update.phase != UpdatePhase.READY) return
+        val dir = File(activity.cacheDir, "updates")
+        val apk = File(dir, "anime-${update.version}.apk")
+        if (!apk.isFile) return
+        prefs.edit().putString("dismissed_tag", "v${update.version}").apply()
+        installUpdate(activity, apk)
+        stateFlow.value = null
+    }
+
+    override fun dismiss() {
+        stateFlow.value?.version?.takeIf { it.isNotBlank() }?.let { version ->
+            prefs.edit().putString("dismissed_tag", "v$version").apply()
         }
-        if (newCode > 0 && newCode <= currentCode) {
-            updatePrefs.edit().putString("attempted_tag", tag).apply()
-            return@launch
-        }
-        updatePrefs.edit().putString("attempted_tag", tag).apply()
-        withContext(Dispatchers.Main) { installUpdate(context, apk) }
-        }
+        stateFlow.value = null
     }
 }
 

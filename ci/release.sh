@@ -28,6 +28,9 @@ VERSION="$(grep -E '^version=' "$PROPS" | cut -d= -f2)"
 CODE="$(grep -E '^versionCode=' "$PROPS" | cut -d= -f2)"
 TAG="v$VERSION"
 
+echo "Checking Anime $VERSION ($CODE)"
+./ci/check.sh
+
 echo "Building Anime $VERSION ($CODE)"
 ./gradlew :app:assembleDebug :desktop:createDistributable
 

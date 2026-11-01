@@ -7,7 +7,9 @@ Native anime app with one shared Kotlin/Compose UI for Android and Linux desktop
 - Persistent caches: search page 1, series views, play sources, HLS segments, images
 - Unified language + resolution menus with automatic stream switching
 - Home screen with continue-watching
-- In-app update check against GitHub Releases
+- In-app update check with download/install screen (Android) and auto-download/restart (Linux)
+- Android picture-in-picture
+- Recents sorting, new-episode markers and fully-watched ordering
 
 ## Build
 

@@ -174,7 +174,7 @@ private class DesktopPlayerHost(
         url: String,
         resumeMs: Long,
         onProgress: (Long, Long) -> Unit,
-        onError: () -> Unit,
+        onError: (String?) -> Unit,
         onSession: (PlayerSession?) -> Unit,
     ) {
         var frame by remember(url) { mutableStateOf<org.jetbrains.skia.Image?>(null) }
@@ -203,9 +203,9 @@ private class DesktopPlayerHost(
                     widgetHeight = h,
                     onFrame = { frame = it },
                     onProgress = { position, duration -> currentProgress(position, duration) },
-                    onError = {
+                    onError = { reason ->
                         failure = "Playback failed."
-                        currentError()
+                        currentError(reason)
                     },
                     onEnded = { },
                 )
@@ -213,9 +213,8 @@ private class DesktopPlayerHost(
                 engine = it
                 currentSession(it)
             }.onFailure {
-                println("[mpv] engine: " + it)
                 failure = "Cannot start playback: " + (it.message ?: "libmpv not found")
-                currentError()
+                currentError(it.message ?: "libmpv not found")
             }
         }
 
@@ -253,6 +252,10 @@ private class DesktopPlayerHost(
 private const val UPDATE_REPO = "VLingott/anime"
 
 private class DesktopUpdateChecker(private val currentVersion: String) : UpdateChecker {
+    private val stateFlow = kotlinx.coroutines.flow.MutableStateFlow<dev.anime.ui.UpdateUiState?>(null)
+    override val state: kotlinx.coroutines.flow.StateFlow<dev.anime.ui.UpdateUiState?> = stateFlow
+    private val prefs = java.util.prefs.Preferences.userRoot().node("dev/anime/desktop/updates")
+
     override fun checkForUpdates() {
         Thread {
             runCatching {
@@ -265,17 +268,93 @@ private class DesktopUpdateChecker(private val currentVersion: String) : UpdateC
                 val text = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
                 val root = kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject
                 val tag = root["tag_name"]?.jsonPrimitive?.contentOrNull ?: return@runCatching
-                val prefs = java.util.prefs.Preferences.userRoot().node("dev/anime/desktop/updates")
                 if (!isNewerVersion(currentVersion, tag)) {
-                    prefs.remove("attempted_tag")
+                    prefs.remove("dismissed_tag")
+                    stateFlow.value = null
                     return@runCatching
                 }
-                if (prefs.get("attempted_tag", null) == tag) return@runCatching
-                prefs.put("attempted_tag", tag)
-                val page = root["html_url"]?.jsonPrimitive?.contentOrNull ?: return@runCatching
-                java.awt.Desktop.getDesktop().browse(java.net.URI(page))
+                if (prefs.get("dismissed_tag", null) == tag) {
+                    stateFlow.value = null
+                    return@runCatching
+                }
+                val version = tag.removePrefix("v")
+                val assets = root["assets"]?.let { it as? kotlinx.serialization.json.JsonArray }
+                    ?.mapNotNull { it as? kotlinx.serialization.json.JsonObject }.orEmpty()
+                val asset = assets.firstOrNull { it["name"]?.jsonPrimitive?.contentOrNull?.contains("linux") == true }
+                    ?: return@runCatching
+                val url = asset["browser_download_url"]?.jsonPrimitive?.contentOrNull ?: return@runCatching
+                val dir = java.io.File(
+                    System.getenv("XDG_DATA_HOME") ?: (System.getProperty("user.home") + "/.local/share"),
+                    "anime/apps/$version",
+                )
+                val binary = java.io.File(dir, "Anime/bin/Anime")
+                if (!binary.isFile) {
+                    stateFlow.value = dev.anime.ui.UpdateUiState(version, dev.anime.ui.UpdatePhase.DOWNLOADING)
+                    val archive = java.io.File(
+                        System.getenv("XDG_CACHE_HOME") ?: (System.getProperty("user.home") + "/.cache"),
+                        "anime/updates/anime-linux-$version.tar.gz",
+                    )
+                    archive.parentFile?.mkdirs()
+                    val download = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    download.connectTimeout = 10_000
+                    download.readTimeout = 60_000
+                    download.setRequestProperty("User-Agent", "Anime/$currentVersion")
+                    val total = download.contentLengthLong
+                    download.inputStream.use { input ->
+                        archive.outputStream().use { output ->
+                            val buffer = ByteArray(128 * 1024)
+                            var copied = 0L
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read <= 0) break
+                                output.write(buffer, 0, read)
+                                copied += read
+                                if (total > 0) {
+                                    stateFlow.value = dev.anime.ui.UpdateUiState(
+                                        version,
+                                        dev.anime.ui.UpdatePhase.DOWNLOADING,
+                                        progress = copied.toFloat() / total,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    dir.mkdirs()
+                    val proc = ProcessBuilder("tar", "-xzf", archive.absolutePath, "-C", dir.absolutePath)
+                        .redirectErrorStream(true)
+                        .start()
+                    proc.inputStream.use { it.readBytes() }
+                    if (proc.waitFor() != 0 || !binary.isFile) error("Could not unpack the update")
+                    binary.setExecutable(true)
+                }
+                stateFlow.value = dev.anime.ui.UpdateUiState(version, dev.anime.ui.UpdatePhase.READY)
+            }.onFailure { error ->
+                stateFlow.value = dev.anime.ui.UpdateUiState(
+                    version = "",
+                    phase = dev.anime.ui.UpdatePhase.ERROR,
+                    error = error.message ?: "Could not check for updates.",
+                )
             }
         }.apply { isDaemon = true; name = "anime-update-check" }.start()
+    }
+
+    override fun install() {
+        val update = stateFlow.value ?: return
+        if (update.phase != dev.anime.ui.UpdatePhase.READY) return
+        val dir = java.io.File(
+            System.getenv("XDG_DATA_HOME") ?: (System.getProperty("user.home") + "/.local/share"),
+            "anime/apps/${update.version}",
+        )
+        val binary = java.io.File(dir, "Anime/bin/Anime")
+        if (!binary.isFile) return
+        prefs.put("dismissed_tag", "v${update.version}")
+        runCatching { ProcessBuilder(binary.absolutePath).start() }
+        kotlin.system.exitProcess(0)
+    }
+
+    override fun dismiss() {
+        stateFlow.value?.version?.takeIf { it.isNotBlank() }?.let { prefs.put("dismissed_tag", "v$it") }
+        stateFlow.value = null
     }
 }
 
