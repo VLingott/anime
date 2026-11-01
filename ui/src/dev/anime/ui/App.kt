@@ -940,6 +940,46 @@ private fun SearchScreen(
 
         if (filters.showFilters) {
             FilterPanel(filters, tagList, onFilters)
+        } else if (hasFilters) {
+            val summary = buildList {
+                addAll(filters.genres)
+                addAll(tagList)
+                filters.formats.forEach { add(it.replace('_', ' ')) }
+                filters.statuses.forEach { add(it.replace('_', ' ')) }
+                filters.season?.let { add(it.lowercase().replaceFirstChar { c -> c.uppercase() }) }
+                if (filters.seasonYear.isNotBlank()) add(filters.seasonYear)
+                if (filters.minScore > 0) add("Score ${filters.minScore}+")
+            }.joinToString(" · ")
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Filters: $summary",
+                    color = Color(0xFF9B9B96),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "Clear",
+                    color = Color(0xFFF5F5F2),
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(start = 10.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Color(0xFF151515))
+                        .clickable {
+                            onFilters(
+                                SearchFilters(
+                                    query = filters.query,
+                                    sort = filters.sort,
+                                ),
+                            )
+                        }
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+            }
         }
 
         if (showSkeleton) {
