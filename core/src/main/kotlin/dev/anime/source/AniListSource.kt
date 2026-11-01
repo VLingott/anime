@@ -133,6 +133,7 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
                 sourceName = name,
                 title = title,
                 titleEn = t?.get("english")?.jsonPrimitive?.contentOrNullSafe(),
+                titleNative = t?.get("native")?.jsonPrimitive?.contentOrNullSafe(),
                 year = o["startDate"]?.jsonObject?.get("year")?.jsonPrimitive?.contentOrNullSafe()?.toIntOrNull(),
                 episodes = o["episodes"]?.jsonPrimitive?.contentOrNullSafe()?.toIntOrNull(),
                 format = o["format"]?.jsonPrimitive?.contentOrNullSafe(),

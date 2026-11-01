@@ -8,6 +8,7 @@ data class SearchHit(
     val sourceName: String,
     val title: String,
     val titleEn: String? = null,
+    val titleNative: String? = null,
     val year: Int? = null,
     val episodes: Int? = null,
     val format: String? = null,

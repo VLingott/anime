@@ -347,6 +347,7 @@ fun App(deps: Deps) {
                 SearchScreen(
                     deps = deps,
                     filters = filters,
+                    titleLanguage = titleLanguage,
                     onFilters = { filters = it },
                     onOpen = { selected = it },
                     onBack = { searchMode = false },
@@ -512,6 +513,7 @@ private fun RecentRow(
 private fun SearchScreen(
     deps: Deps,
     filters: SearchFilters,
+    titleLanguage: TitleLanguage,
     onFilters: (SearchFilters) -> Unit,
     onOpen: (Long) -> Unit,
     onBack: () -> Unit,
@@ -654,7 +656,7 @@ private fun SearchScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(hits, key = { it.externalId ?: it.url }) { hit ->
-                SearchRow(deps, hit) { hit.externalId?.toLongOrNull()?.let(onOpen) }
+                SearchRow(deps, hit, titleLanguage) { hit.externalId?.toLongOrNull()?.let(onOpen) }
             }
             if (loadingMore) {
                 item { SearchSkeleton(rows = 2) }
@@ -922,7 +924,7 @@ private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun SearchRow(deps: Deps, hit: SearchHit, onClick: () -> Unit) {
+private fun SearchRow(deps: Deps, hit: SearchHit, titleLanguage: TitleLanguage, onClick: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color(0xFF0C0C0C))
             .clickable(onClick = onClick).padding(10.dp),
@@ -953,8 +955,13 @@ private fun SearchRow(deps: Deps, hit: SearchHit, onClick: () -> Unit) {
             if (eyebrow.isNotBlank()) {
                 Text(eyebrow.uppercase(), color = Color(0xFFF5F5F2), fontSize = 9.5.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold)
             }
+            val displayTitle = when (titleLanguage) {
+                TitleLanguage.ROMAJI -> hit.title ?: hit.titleEn ?: hit.titleNative ?: "Untitled"
+                TitleLanguage.ENGLISH -> hit.titleEn ?: hit.title ?: hit.titleNative ?: "Untitled"
+                TitleLanguage.NATIVE -> hit.titleNative ?: hit.title ?: hit.titleEn ?: "Untitled"
+            }
             Text(
-                hit.title ?: hit.titleEn ?: "Untitled",
+                displayTitle,
                 color = Color(0xFFF5F5F2),
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 15.sp,
