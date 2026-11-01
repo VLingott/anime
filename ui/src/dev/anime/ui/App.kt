@@ -1693,25 +1693,32 @@ private fun buildResolutionOptions(
     index: Int,
     session: PlayerSession?,
     probed: Map<String, List<PlayerResolution>>,
+    language: String,
 ): List<PlayerResolutionOption> {
     val out = LinkedHashMap<String, PlayerResolutionOption>()
     val activeId = session?.activeResolutionId
-    out["Auto"] = PlayerResolutionOption(
-        label = "Auto",
-        id = "auto",
-        sourceIndex = index,
-        selected = activeId == null || activeId == "auto",
-    )
-    session?.resolutions?.forEach { resolution ->
-        if (resolution.id == "auto") return@forEach
-        out[resolution.label] = PlayerResolutionOption(
-            label = resolution.label,
-            id = resolution.id,
+    val currentSource = sources.getOrNull(index)
+    val currentMatches = currentSource?.languages?.any { it.equals(language, ignoreCase = true) } ?: true
+
+    if (currentMatches) {
+        out["Auto"] = PlayerResolutionOption(
+            label = "Auto",
+            id = "auto",
             sourceIndex = index,
-            selected = resolution.selected || resolution.id == activeId,
+            selected = activeId == null || activeId == "auto",
         )
+        session?.resolutions?.forEach { resolution ->
+            if (resolution.id == "auto") return@forEach
+            out[resolution.label] = PlayerResolutionOption(
+                label = resolution.label,
+                id = resolution.id,
+                sourceIndex = index,
+                selected = resolution.selected || resolution.id == activeId,
+            )
+        }
     }
     sources.forEachIndexed { sourceIndex, source ->
+        if (source.languages.none { it.equals(language, ignoreCase = true) }) return@forEachIndexed
         probed[source.url].orEmpty().forEach { resolution ->
             if (!out.containsKey(resolution.label)) {
                 out[resolution.label] = PlayerResolutionOption(
@@ -2048,7 +2055,13 @@ private fun PlayerOverlay(
                         PlayerControls(
                             session = current,
                             languages = buildLanguages(sources, index, current),
-                            resolutions = buildResolutionOptions(sources, index, current, probedResolutions),
+                            resolutions = buildResolutionOptions(
+                                sources = sources,
+                                index = index,
+                                session = current,
+                                probed = probedResolutions,
+                                language = activeLanguage,
+                            ),
                             onSelectResolution = { option ->
                                 if (option.sourceIndex == index) {
                                     current.selectResolution(option.id ?: "auto")
