@@ -317,7 +317,7 @@ fun App(deps: Deps) {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             val currentPlayer = player
             if (currentPlayer != null) {
-                PlayerOverlay(deps, currentPlayer, onClose = { player = null; refreshTick++ })
+                PlayerOverlay(deps, currentPlayer, titleLanguage, onClose = { player = null; refreshTick++ })
             } else if (selected != null) {
                 DetailScreen(
                     deps = deps,
@@ -357,13 +357,14 @@ fun App(deps: Deps) {
                 HomeScreen(
                     deps = deps,
                     refreshTick = refreshTick,
+                    titleLanguage = titleLanguage,
                     onSearch = { searchMode = true },
                     onResume = { recent ->
                         player = PlayerArgs(
                             id = recent.id,
                             season = recent.season,
                             episode = recent.episode,
-                            label = "${recent.title} — S${recent.season} E${recent.episode}",
+                            label = "${recent.title} · S${recent.season} E${recent.episode}",
                             title = recent.title,
                             cover = recent.cover,
                             score = recent.score,
@@ -380,6 +381,7 @@ fun App(deps: Deps) {
 private fun HomeScreen(
     deps: Deps,
     refreshTick: Int,
+    titleLanguage: TitleLanguage,
     onSearch: () -> Unit,
     onResume: (RecentSeries) -> Unit,
 ) {
@@ -433,7 +435,7 @@ private fun HomeScreen(
                 }
             } else {
                 items(recents, key = { it.id }) { recent ->
-                    RecentRow(deps, recent, onResume)
+                    RecentRow(deps, recent, titleLanguage, onResume)
                 }
             }
         }
@@ -444,8 +446,12 @@ private fun HomeScreen(
 private fun RecentRow(
     deps: Deps,
     recent: RecentSeries,
+    titleLanguage: TitleLanguage,
     onResume: (RecentSeries) -> Unit,
 ) {
+    val cachedDetail = remember(recent.id) { deps.core.series.peek(recent.id)?.detail }
+    val displayRecentTitle = cachedDetail?.let { displayTitle(it, titleLanguage) } ?: recent.title
+    val displayScore = recent.score ?: cachedDetail?.averageScore
     val fraction = deps.progress.fraction(recent.id, recent.season, recent.episode)
         ?: recent.positionMs.toFloat().div(recent.durationMs.toFloat()).takeIf { recent.durationMs > 0 }
 
@@ -468,7 +474,7 @@ private fun RecentRow(
                     .background(Color(0xFF151515)),
                 ContentScale.Crop,
             )
-            recent.score?.takeIf { it > 0 }?.let { score ->
+            displayScore?.takeIf { it > 0 }?.let { score ->
                 ImageRatingRing(
                     score,
                     imageCorner = coverCorner,
@@ -480,7 +486,7 @@ private fun RecentRow(
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                recent.title,
+                displayRecentTitle,
                 color = Color(0xFFF5F5F2),
                 fontSize = 15.sp,
                 fontWeight = FontWeight.ExtraBold,
@@ -1253,7 +1259,7 @@ private fun DetailScreen(
                                                 onPlay(
                                                     seasonNumber,
                                                     ep.number ?: 0,
-                                                    "${displayTitle(d, titleLanguage)} — S$seasonNumber E${ep.number}",
+                                                    "${displayTitle(d, titleLanguage)} · S$seasonNumber E${ep.number}",
                                                     displayTitle(d, titleLanguage),
                                                     d.coverImage,
                                                     d.averageScore,
@@ -1273,7 +1279,7 @@ private fun DetailScreen(
         playTarget?.let { (season, episode) ->
             val isSeries = seasons.any { it.first == season }
             val label = if (isSeries) {
-                "${displayTitle(d, titleLanguage)} — S$season E$episode"
+                "${displayTitle(d, titleLanguage)} · S$season E$episode"
             } else {
                 displayTitle(d, titleLanguage)
             }
@@ -1745,7 +1751,12 @@ private fun buildLanguages(sources: List<PlaySource>, index: Int, session: Playe
 }
 
 @Composable
-private fun PlayerOverlay(deps: Deps, args: PlayerArgs, onClose: () -> Unit) {
+private fun PlayerOverlay(
+    deps: Deps,
+    args: PlayerArgs,
+    titleLanguage: TitleLanguage,
+    onClose: () -> Unit,
+) {
     deps.back.Back { onClose() }
     var sources by remember(args) { mutableStateOf<List<PlaySource>>(emptyList()) }
     var index by remember(args) { mutableStateOf(0) }
@@ -1763,6 +1774,25 @@ private fun PlayerOverlay(deps: Deps, args: PlayerArgs, onClose: () -> Unit) {
     var probedResolutions by remember(args) { mutableStateOf<Map<String, List<PlayerResolution>>>(emptyMap()) }
     var pendingResolution by remember(args) { mutableStateOf<String?>(null) }
     val focus = remember { FocusRequester() }
+
+    val headerDetail = remember(args.id) { deps.core.series.peek(args.id)?.detail }
+    val headerTitle = headerDetail?.let { displayTitle(it, titleLanguage) } ?: args.title
+    val currentSource = sources.getOrNull(index)
+    val activeLanguage = session?.let { active ->
+        active.audioTracks.firstOrNull { it.id == active.activeAudioId }
+            ?.let { languageLabelFor(it, currentSource) }
+    } ?: deps.progress.audioPreference(args.id) ?: "Japanese"
+    val titleSource = sources.firstOrNull {
+        it.episodeTitleGerman != null || it.episodeTitleEnglish != null
+    } ?: currentSource
+    val headerEpisodeTitle = (
+        if (activeLanguage.equals("German", ignoreCase = true)) {
+            titleSource?.episodeTitleGerman ?: args.episodeTitle
+        } else {
+            titleSource?.episodeTitleEnglish ?: args.episodeTitle
+        }
+    ) ?: "Episode ${args.episode}"
+    val headerLabel = "$headerTitle · S${args.season} E${args.episode}"
 
     val toggleFullscreen = {
         fullscreen = !fullscreen
@@ -2003,22 +2033,19 @@ private fun PlayerOverlay(deps: Deps, args: PlayerArgs, onClose: () -> Unit) {
                             ) {
                                 Column(Modifier.widthIn(max = 520.dp)) {
                                     Text(
-                                        args.label,
+                                        headerLabel,
                                         color = Color(0xFFC9C9C3),
                                         fontSize = 11.sp,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
-                                    val episodeTitle = args.episodeTitle?.takeIf { it.isNotBlank() }
-                                    if (episodeTitle != null) {
-                                        Text(
-                                            episodeTitle,
-                                            color = Color(0xFFF5F5F2),
-                                            fontSize = 13.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
+                                    Text(
+                                        headerEpisodeTitle,
+                                        color = Color(0xFFF5F5F2),
+                                        fontSize = 13.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
                                 }
                             }
                             Spacer(Modifier.weight(1f))

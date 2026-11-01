@@ -38,6 +38,8 @@ class AniWorldProvider : PlaybackProvider {
     private val jsRedirect = Regex("""window\.location\.href\s*=\s*'([^']+)'""")
     private val legacyPayload = Regex("""var a168c='([^']+)'""")
     private val m3u8Pattern = Regex("""https?://[^'"\s<>]+\.m3u8[^'"\s<>]*""")
+    private val germanTitlePattern = Regex("""class="episodeGermanTitle">([^<]*)<""")
+    private val englishTitlePattern = Regex("""class="episodeEnglishTitle">([^<]*)<""")
     private val listItem = Regex("""<li[^>]*data-lang-key="(\d+)"[^>]*>""")
     private val linkTarget = Regex("""data-link-target="([^"]+)"""")
 
@@ -63,6 +65,15 @@ class AniWorldProvider : PlaybackProvider {
         }
         if (byLanguage.isEmpty()) return emptyList()
 
+        var episodeTitleGerman: String? = null
+        var episodeTitleEnglish: String? = null
+        for (pageSeason in pageSeasons) {
+            val html = fetch("$BASE/anime/stream/$slug/staffel-$pageSeason/episode-$episode", ctx) ?: continue
+            episodeTitleGerman = germanTitlePattern.find(html)?.groupValues?.get(1)?.let(::decodeEntities)?.trim()?.takeIf { it.isNotEmpty() }
+            episodeTitleEnglish = englishTitlePattern.find(html)?.groupValues?.get(1)?.let(::decodeEntities)?.trim()?.takeIf { it.isNotEmpty() }
+            if (episodeTitleGerman != null || episodeTitleEnglish != null) break
+        }
+
         for (language in LANGUAGE_ORDER) {
             val targets = byLanguage[language]?.distinct()?.take(4) ?: continue
             val sources = coroutineScope {
@@ -77,6 +88,8 @@ class AniWorldProvider : PlaybackProvider {
                             kind = "hls",
                             url = proxied,
                             languages = listOf(if (language == 1) "German" else "Japanese"),
+                            episodeTitleGerman = episodeTitleGerman,
+                            episodeTitleEnglish = episodeTitleEnglish,
                         )
                     }
                 }.awaitAll().filterNotNull()
@@ -254,6 +267,17 @@ class AniWorldProvider : PlaybackProvider {
             header(HttpHeaders.Accept, "text/html,application/xhtml+xml")
         }.bodyAsText()
     }.getOrNull()
+
+    private fun decodeEntities(value: String): String = value
+        .replace("&#039;", "'")
+        .replace("&apos;", "'")
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace(Regex("""&#(\d+);""")) { match ->
+            match.groupValues[1].toIntOrNull()?.toChar()?.toString() ?: match.value
+        }
 
     private fun normalize(value: String): String =
         value.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()

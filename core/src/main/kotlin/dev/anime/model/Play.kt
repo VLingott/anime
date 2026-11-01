@@ -9,6 +9,8 @@ data class PlaySource(
     val kind: String = "hls",
     val url: String,
     val languages: List<String> = emptyList(),
+    val episodeTitleGerman: String? = null,
+    val episodeTitleEnglish: String? = null,
 )
 
 @Serializable
