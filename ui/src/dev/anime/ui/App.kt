@@ -1837,6 +1837,34 @@ private fun PlayerOverlay(
         index = preferredIndex.coerceAtLeast(0)
         failed = sources.isEmpty()
         status = if (sources.isEmpty()) (resp?.error ?: "No playable source.") else ""
+
+        if (sources.isNotEmpty()) {
+            delay(900)
+            val fresh = withContext(Dispatchers.IO) {
+                runCatching {
+                    deps.core.playback.play(
+                        args.id.toString(),
+                        args.season,
+                        args.episode,
+                        forceRefresh = true,
+                    )
+                }.getOrNull()
+            }
+            if (fresh != null && fresh.sources.isNotEmpty()) {
+                val oldLanguages = sources.flatMap { it.languages }.toSet()
+                val newLanguages = fresh.sources.flatMap { it.languages }.toSet()
+                if (newLanguages.size > oldLanguages.size && newLanguages.containsAll(oldLanguages)) {
+                    val position = session?.positionMs ?: resumeFrom
+                    val preferred = deps.progress.audioPreference(args.id) ?: "Japanese"
+                    val targetIndex = fresh.sources.indexOfFirst { source ->
+                        source.languages.any { it.equals(preferred, ignoreCase = true) }
+                    }
+                    resumeFrom = position
+                    sources = fresh.sources
+                    index = if (targetIndex >= 0) targetIndex else index.coerceIn(0, fresh.sources.lastIndex)
+                }
+            }
+        }
     }
 
     LaunchedEffect(session?.audioTracks, sources, index) {
@@ -1985,24 +2013,34 @@ private fun PlayerOverlay(
                         val currentLanguage = preferred
                             ?: active?.audioTracks?.firstOrNull { it.id == active.activeAudioId }?.label
                         val candidates = ((index + 1) until sources.size).toList()
-                        val next = candidates.firstOrNull { candidate ->
+                        val sameLanguage = candidates.firstOrNull { candidate ->
                             currentLanguage != null && sources[candidate].languages.any {
                                 it.equals(currentLanguage, ignoreCase = true)
                             }
-                        } ?: candidates.firstOrNull()
-                        if (next != null) {
-                            index = next
-                            resumeFrom = resumeAt
-                            status = "Reconnecting…"
-                        } else if (!refreshedOnce) {
-                            refreshedOnce = true
-                            resumeFrom = resumeAt
-                            resolveAttempt += 1
-                            status = "Refreshing stream…"
-                            failed = false
-                        } else {
-                            failed = true
-                            status = "All sources failed."
+                        }
+                        val anyLanguage = candidates.firstOrNull()
+                        when {
+                            sameLanguage != null -> {
+                                index = sameLanguage
+                                resumeFrom = resumeAt
+                                status = "Reconnecting…"
+                            }
+                            !refreshedOnce && currentLanguage != null -> {
+                                refreshedOnce = true
+                                resumeFrom = resumeAt
+                                resolveAttempt += 1
+                                status = "Refreshing stream…"
+                                failed = false
+                            }
+                            anyLanguage != null -> {
+                                index = anyLanguage
+                                resumeFrom = resumeAt
+                                status = "Reconnecting…"
+                            }
+                            else -> {
+                                failed = true
+                                status = "All sources failed."
+                            }
                         }
                     },
                     onSession = { newSession ->
