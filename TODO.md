@@ -46,7 +46,7 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Recents: new-episode marker, sorting, fully-watched entries sorted last.
 - [x] Recents: long-press removal with confirmation (deletes recents + progress + audio preference).
 - [ ] Recents: hide without deleting, episode title in the row.
-- [x] Search: tags selectable like genres; genre/tag chips cycle include → exclude (red) → neutral.
+- [x] Search: tags selectable like genres, searchable full AniList tag catalog, multi-row overlay filter dialog; chips cycle include → exclude (red) → neutral.
 - [ ] Search: recent searches, clear button, result count, keyboard/DPAD focus order.
 - [ ] Accessibility: content descriptions/roles for all Canvas icons, focus states, screen-reader labels, minimum touch targets.
 - [ ] Localization/i18n for UI strings (German first), date/number formatting.

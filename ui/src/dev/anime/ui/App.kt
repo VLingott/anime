@@ -983,16 +983,38 @@ private fun SearchScreen(
     var endReached by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf(1) }
     var error by remember { mutableStateOf<String?>(null) }
+    var tagCatalog by remember { mutableStateOf<List<String>>(emptyList()) }
+    var tagLoading by remember { mutableStateOf(false) }
+    var tagQuery by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    val tagOptions = remember(hits, filters.tags, filters.excludedTags) {
+    LaunchedEffect(filters.showFilters) {
+        if (!filters.showFilters) {
+            tagQuery = ""
+            return@LaunchedEffect
+        }
+        if (tagCatalog.isNotEmpty() || tagLoading) return@LaunchedEffect
+        tagLoading = true
+        tagCatalog = withContext(Dispatchers.IO) {
+            runCatching { deps.core.aniList.allTags(deps.core.ctx) }.getOrDefault(emptyList())
+        }
+        tagLoading = false
+    }
+
+    val fallbackTags = remember(hits, filters.tags, filters.excludedTags) {
         val counts = hits.flatMap { it.tags }.groupingBy { it }.eachCount()
         val popular = counts.entries
             .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
             .map { it.key }
-        (filters.tags.sorted() + filters.excludedTags.sorted() + popular)
-            .distinct()
-            .take(48)
+        (filters.tags.sorted() + filters.excludedTags.sorted() + popular).distinct()
+    }
+    val tagOptions = remember(tagCatalog, fallbackTags, tagQuery, filters.tags, filters.excludedTags) {
+        val selected = filters.tags + filters.excludedTags
+        val source = if (tagCatalog.isNotEmpty()) tagCatalog else fallbackTags
+        val query = tagQuery.trim()
+        (source + selected).distinct().filter { tag ->
+            query.isEmpty() || tag in selected || tag.contains(query, ignoreCase = true)
+        }
     }
     val hasFilters = filters.genres.isNotEmpty() || filters.excludedGenres.isNotEmpty() ||
         filters.tags.isNotEmpty() || filters.excludedTags.isNotEmpty() || filters.minScore > 0 ||
@@ -1092,7 +1114,15 @@ private fun SearchScreen(
         }
 
         if (filters.showFilters) {
-            FilterPanel(filters, tagOptions, onFilters)
+            FiltersOverlay(
+                filters = filters,
+                tagOptions = tagOptions,
+                tagQuery = tagQuery,
+                onTagQuery = { tagQuery = it },
+                loadingTags = tagLoading,
+                onFilters = onFilters,
+                onDismiss = { onFilters(filters.copy(showFilters = false)) },
+            )
         } else if (hasFilters) {
             val summary = buildList {
                 filters.genres.forEach { add(it) }
@@ -1274,19 +1304,65 @@ private fun SortIconButton(filters: SearchFilters, onFilters: (SearchFilters) ->
     }
 }
 
+@Composable
+private fun FiltersOverlay(
+    filters: SearchFilters,
+    tagOptions: List<String>,
+    tagQuery: String,
+    onTagQuery: (String) -> Unit,
+    loadingTags: Boolean,
+    onFilters: (SearchFilters) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color(0xFF0C0C0C),
+            modifier = Modifier.widthIn(max = 680.dp).fillMaxWidth().padding(16.dp),
+        ) {
+            Column(Modifier.heightIn(max = 620.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp, top = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Filters", color = Color(0xFFF5F5F2), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "Done",
+                        color = Color(0xFFF5F5F2),
+                        fontSize = 13.sp,
+                        modifier = Modifier.clickable(onClick = onDismiss).padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                }
+                FilterPanel(
+                    filters = filters,
+                    tagOptions = tagOptions,
+                    tagQuery = tagQuery,
+                    onTagQuery = onTagQuery,
+                    loadingTags = loadingTags,
+                    onFilters = onFilters,
+                    modifier = Modifier.weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 18.dp)
+                        .padding(bottom = 18.dp),
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FilterPanel(filters: SearchFilters, tagOptions: List<String>, onFilters: (SearchFilters) -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(max = 360.dp)
-            .padding(horizontal = 14.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xFF0C0C0C))
-            .verticalScroll(rememberScrollState())
-            .padding(12.dp),
-    ) {
+private fun FilterPanel(
+    filters: SearchFilters,
+    tagOptions: List<String>,
+    tagQuery: String,
+    onTagQuery: (String) -> Unit,
+    loadingTags: Boolean,
+    onFilters: (SearchFilters) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth()) {
         Label("GENRES")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             AniListSource.GENRES.forEach { genre ->
@@ -1302,16 +1378,38 @@ private fun FilterPanel(filters: SearchFilters, tagOptions: List<String>, onFilt
         }
 
         Label("TAGS")
+        OutlinedTextField(
+            value = tagQuery,
+            onValueChange = onTagQuery,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            placeholder = { Text("Search tags…", color = Color(0xFF6F6F6F), fontSize = 12.sp) },
+            textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFFF5F5F2), fontSize = 13.sp),
+            shape = RoundedCornerShape(10.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(0xFF6F6F6F),
+                unfocusedBorderColor = Color(0xFF232323),
+                focusedContainerColor = Color(0xFF151515),
+                unfocusedContainerColor = Color(0xFF151515),
+                cursorColor = Color(0xFFF5F5F2),
+            ),
+        )
+        Text(
+            if (loadingTags) "Loading all tags…" else "${tagOptions.size} tags",
+            color = Color(0xFF9B9B96),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(top = 4.dp),
+        )
         if (tagOptions.isEmpty()) {
             Text(
-                "Tags from the current results will appear here.",
+                "No tags match.",
                 color = Color(0xFF9B9B96),
                 fontSize = 11.sp,
                 modifier = Modifier.padding(top = 2.dp),
             )
         } else {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(tagOptions, key = { it }) { tag ->
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                tagOptions.forEach { tag ->
                     Chip(
                         tag,
                         selected = tag in filters.tags,

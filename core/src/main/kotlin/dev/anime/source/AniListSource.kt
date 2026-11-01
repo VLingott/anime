@@ -3,11 +3,13 @@ package dev.anime.source
 import dev.anime.cache.ByteLruCache
 import dev.anime.cache.DiskCache
 import dev.anime.model.SearchHit
+import dev.anime.util.AppLog
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -16,6 +18,9 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.io.File
 
 data class AniListFilter(
     val search: String = "",
@@ -34,8 +39,11 @@ data class AniListFilter(
 )
 
 class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
-    private val disk = cacheDir?.let { DiskCache(java.io.File(it, "search"), 32L * 1024 * 1024) }
+    private val disk = cacheDir?.let { DiskCache(File(it, "search"), 32L * 1024 * 1024) }
+    private val tagDisk = cacheDir?.let { DiskCache(File(it, "tags-v1"), 2L * 1024 * 1024) }
     private val cacheJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+    private val tagLock = Mutex()
+    @Volatile private var tagCache: List<String>? = null
 
     private val searchCache = ByteLruCache<String, List<SearchHit>>(32L * 1024 * 1024) { hits ->
         var bytes = 256L
@@ -177,6 +185,43 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
             disk?.write(cacheKey, cacheJson.encodeToString(hits))
         }
         return hits
+    }
+
+    suspend fun allTags(ctx: SourceContext): List<String> = tagLock.withLock {
+        tagCache?.let { return@withLock it }
+        val cached = tagDisk?.read("all")?.let { text ->
+            runCatching { cacheJson.decodeFromString<List<String>>(text) }
+                .onFailure { AppLog.w("anilist", "Ignoring unreadable tag cache", it) }
+                .getOrNull()
+        }
+        if (!cached.isNullOrEmpty()) {
+            tagCache = cached
+            return@withLock cached
+        }
+
+        val tags = runCatching {
+            val res = ctx.http.post("https://graphql.anilist.co") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"query":"query { MediaTagCollection { name isAdult } }"}""")
+            }
+            if (res.status.value != 200) error("AniList tags returned HTTP ${res.status.value}")
+            val root = Json.parseToJsonElement(res.bodyAsText()).jsonObject
+            root["data"]?.jsonObject?.get("MediaTagCollection")?.jsonArray.orEmpty()
+                .mapNotNull { element ->
+                    val tag = element.jsonObject
+                    if (tag["isAdult"]?.jsonPrimitive?.contentOrNullSafe() == "true") return@mapNotNull null
+                    tag["name"]?.jsonPrimitive?.contentOrNullSafe()?.trim()?.takeIf { it.isNotEmpty() }
+                }
+                .distinct()
+                .sortedBy { it.lowercase() }
+        }.onFailure { AppLog.w("anilist", "Tag catalog load failed", it) }.getOrDefault(emptyList())
+
+        if (tags.isNotEmpty()) {
+            tagCache = tags
+            runCatching { tagDisk?.write("all", cacheJson.encodeToString(tags)) }
+                .onFailure { AppLog.w("anilist", "Could not persist tag catalog", it) }
+        }
+        tags
     }
 
     fun peekPage1(filter: AniListFilter): List<SearchHit>? {
