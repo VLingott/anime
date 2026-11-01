@@ -21,4 +21,5 @@ dependencies {
     api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     api("org.jsoup:jsoup:1.21.2")
     compileOnly("org.xerial:sqlite-jdbc:3.50.3.0")
+    testImplementation(kotlin("test"))
 }

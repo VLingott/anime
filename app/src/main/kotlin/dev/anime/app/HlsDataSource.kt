@@ -6,7 +6,10 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import dev.anime.web.HlsProxy
 import kotlinx.coroutines.runBlocking
+import java.io.ByteArrayInputStream
+import java.io.FileInputStream
 import java.io.IOException
+import java.io.InputStream
 
 /**
  * In-process HLS data source: resolves the app's custom scheme, fetches upstream
@@ -18,8 +21,8 @@ class HlsDataSourceFactory(private val engine: HlsProxy) : DataSource.Factory {
 }
 
 private class HlsDataSource(private val engine: HlsProxy) : BaseDataSource(false) {
-    private var bytes: ByteArray = ByteArray(0)
-    private var position = 0
+    private var stream: InputStream? = null
+    private var length: Long = 0L
     private var opened = false
     private var currentUri: Uri? = null
 
@@ -32,26 +35,34 @@ private class HlsDataSource(private val engine: HlsProxy) : BaseDataSource(false
 
         val result = runBlocking {
             runCatching {
-                if (target.link != null) engine.openLink(target.link) else engine.handle(target.url.orEmpty())
+                if (target.link != null) {
+                    engine.openLink(target.link)
+                } else {
+                    engine.handleFile(target.url.orEmpty())
+                }
             }.getOrNull()
         } ?: throw IOException("Upstream fetch failed: ${target.link ?: target.url}")
 
-        bytes = when (result) {
-            is HlsProxy.Result.Playlist -> result.text.toByteArray(Charsets.UTF_8)
-            is HlsProxy.Result.Binary -> result.bytes
+        stream = when (result) {
+            is HlsProxy.Result.Playlist -> ByteArrayInputStream(result.text.toByteArray(Charsets.UTF_8))
+            is HlsProxy.Result.FileData -> FileInputStream(result.file)
+            is HlsProxy.Result.Binary -> ByteArrayInputStream(result.bytes)
         }
-        position = 0
+        length = when (result) {
+            is HlsProxy.Result.Playlist -> result.text.toByteArray(Charsets.UTF_8).size.toLong()
+            is HlsProxy.Result.FileData -> result.file.length()
+            is HlsProxy.Result.Binary -> result.bytes.size.toLong()
+        }
         opened = true
         transferStarted(dataSpec)
-        return bytes.size.toLong()
+        return length
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (length == 0) return 0
-        if (position >= bytes.size) return C.RESULT_END_OF_INPUT
-        val count = minOf(length, bytes.size - position)
-        System.arraycopy(bytes, position, buffer, offset, count)
-        position += count
+        val current = stream ?: return C.RESULT_END_OF_INPUT
+        val count = current.read(buffer, offset, length)
+        if (count <= 0) return C.RESULT_END_OF_INPUT
         bytesTransferred(count)
         return count
     }
@@ -63,8 +74,9 @@ private class HlsDataSource(private val engine: HlsProxy) : BaseDataSource(false
             opened = false
             transferEnded()
         }
-        bytes = ByteArray(0)
-        position = 0
+        runCatching { stream?.close() }
+        stream = null
+        length = 0L
     }
 }
 

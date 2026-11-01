@@ -101,6 +101,9 @@ private object Core {
                 is HlsProxy.Result.Binary -> newFixedLengthResponse(
                     Response.Status.OK, result.contentType, result.bytes.inputStream(), result.bytes.size.toLong(),
                 )
+                is HlsProxy.Result.FileData -> newFixedLengthResponse(
+                    Response.Status.OK, result.contentType, result.file.inputStream(), result.file.length(),
+                )
             }
         }
     }

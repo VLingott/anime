@@ -27,6 +27,7 @@ class HlsProxy(
     sealed interface Result {
         data class Playlist(val text: String) : Result
         data class Binary(val bytes: ByteArray, val contentType: String) : Result
+        data class FileData(val file: File, val contentType: String) : Result
     }
 
     private val root = File(dir).apply { mkdirs() }
@@ -53,13 +54,27 @@ class HlsProxy(
         return handle(decrypted)
     }
 
-    suspend fun handle(rawUrl: String): Result? {
+    private fun resolveTarget(rawUrl: String): String? {
         val requested = rawUrl.trim()
-        val url = if (requested.startsWith("http://") || requested.startsWith("https://")) {
+        return if (requested.startsWith("http://") || requested.startsWith("https://")) {
             requested
         } else {
-            targets[requested] ?: return null
+            targets[requested]
         }
+    }
+
+    suspend fun handleFile(rawUrl: String): Result? {
+        val url = resolveTarget(rawUrl) ?: return null
+        if (isPlaylistPath(url)) {
+            return handle(url)
+        }
+        val file = cachedFile(url) ?: return null
+        val contentType = if (isKeyPath(url)) "application/octet-stream" else "video/mp2t"
+        return Result.FileData(file, contentType)
+    }
+
+    suspend fun handle(rawUrl: String): Result? {
+        val url = resolveTarget(rawUrl) ?: return null
 
         if (isPlaylistPath(url)) {
             val text = withTimeoutOrNull(20_000) {
@@ -129,6 +144,13 @@ class HlsProxy(
         }
         val query = target.indexOf('?')
         return if (query < 0) "$target/$suffix" else target.substring(0, query) + "/" + suffix + target.substring(query)
+    }
+
+    private suspend fun cachedFile(url: String): File? {
+        val file = File(root, sha1(url) + ".bin")
+        if (file.length() > 0) return file
+        cached(url) ?: return null
+        return file.takeIf { it.length() > 0 }
     }
 
     private suspend fun cached(url: String): ByteArray? {

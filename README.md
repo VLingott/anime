@@ -9,6 +9,7 @@ Native anime app with one shared Kotlin/Compose UI for Android and Linux desktop
 - Home screen with continue-watching
 - In-app update check with download/install screen (Android) and auto-download/restart (Linux)
 - Android picture-in-picture
+- In-app update screens with automatic download (Android install prompt, Linux restart)
 - Recents sorting, new-episode markers and fully-watched ordering
 
 ## Build

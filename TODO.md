@@ -4,12 +4,18 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 
 ## P0 — robustness
 
-- [ ] Stream HLS segments on Android instead of buffering each segment into a `ByteArray` in `HlsDataSource`; add Range/partial reads and a size cap.
+- [x] Read cached HLS segments from disk streams on Android instead of retaining whole byte arrays in `HlsDataSource` (upstream fetch still buffers for decode). Range/partial reads remain.
+- [x] Verify the downloaded APK is signed by the installed app before offering install.
+- [x] Android audio focus handling.
+- [x] Remove the dev server/web module.
+- [x] Terminal error screen with reason + retry; update error dialog.
 - [ ] Add structured logging + a crash/error log file on Android and desktop. Replace remaining silent `runCatching` paths with contextual logs.
 - [ ] Split play cache into long-lived capabilities (languages/resolutions) and short-lived URLs; validate URLs on use and keep stale entries only as fallback.
-- [ ] Single-flight every duplicated resolve path: prewarm, PlaybackService refresh, player revalidation, 23-season AniWorld structure scan.
+- [x] Single-flight series loads.
+- [ ] Single-flight play/prewarm/revalidation and the 23-season AniWorld structure scan.
 - [ ] Add cache schema/version + migration and a cache reset path; persist AniWorld season structure.
-- [ ] Add unit tests for parsers, cache eviction, version comparison, absolute episode mapping, and sync merge (when added).
+- [x] Unit tests for LRU/disk cache eviction and access ordering.
+- [ ] Add unit tests for parsers, version comparison, absolute episode mapping, and sync merge (when added).
 - [ ] Verify downloaded update APK signature/hash before handing it to the installer; sign release assets with a dedicated key (documented upgrade path).
 - [ ] Android: persist player session across process death; handle audio becoming noisy and focus loss explicitly.
 - [ ] Desktop: bundle libmpv with the tar (or detect and explain missing libmpv); replace fixed proxy port with a free port.
@@ -22,13 +28,16 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [ ] Subtitle track selection (including AniWorld GerSub) and subtitle styling.
 - [ ] Next episode / autoplay after end; “up next” card.
 - [ ] Buffering indicator and seek-preview thumbnails.
-- [ ] Player volume/brightness gestures, playback speed, PiP button on Android.
-- [ ] Recents: remove/hide entries, episode title in the row, “new episode” count, fully-watched filter.
+- [x] Android PiP (automatic when leaving while playing).
+- [ ] Player volume/brightness gestures, playback speed, explicit PiP button.
+- [x] Recents: new-episode marker, sorting, fully-watched entries sorted last.
+- [ ] Recents: remove/hide entries, episode title in the row.
 - [ ] Search: recent searches, clear button, result count, keyboard/DPAD focus order.
 - [ ] Accessibility: content descriptions/roles for all Canvas icons, focus states, screen-reader labels, minimum touch targets.
 - [ ] Localization/i18n for UI strings (German first), date/number formatting.
 - [ ] Desktop image cache: disk-backed LRU and byte cap; Android: explicit Coil memory/disk sizes.
-- [ ] Update UI: show release notes and download size; add “skip this version”.
+- [x] Update dialog with download progress and install/restart.
+- [ ] Show release notes/download size; add “skip this version”.
 - [ ] Add LICENSE, CONTRIBUTING, issue templates, and a changelog.
 - [ ] Replace hardcoded build versions/dependencies with a version catalog.
 

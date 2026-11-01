@@ -477,7 +477,8 @@ internal class AndroidUpdateChecker(
                     }
                 }
 
-                val archive = activity.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)
+                @Suppress("DEPRECATION")
+                val archive = activity.packageManager.getPackageArchiveInfo(apk.absolutePath, android.content.pm.PackageManager.GET_SIGNATURES)
                 val newCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     archive?.longVersionCode ?: 0L
                 } else {
@@ -494,6 +495,21 @@ internal class AndroidUpdateChecker(
                 if (newCode <= currentCode) {
                     prefs.edit().putString("dismissed_tag", tag).apply()
                     stateFlow.value = null
+                    return@launch
+                }
+                @Suppress("DEPRECATION")
+                val archiveSignatures = archive?.signatures?.map { it.toCharsString() }?.toSet().orEmpty()
+                @Suppress("DEPRECATION")
+                val installedInfo = activity.packageManager.getPackageInfo(activity.packageName, android.content.pm.PackageManager.GET_SIGNATURES)
+                @Suppress("DEPRECATION")
+                val installedSignatures = installedInfo.signatures?.map { it.toCharsString() }?.toSet().orEmpty()
+                if (archiveSignatures.isNotEmpty() && installedSignatures.isNotEmpty() && archiveSignatures != installedSignatures) {
+                    apk.delete()
+                    stateFlow.value = UpdateUiState(
+                        versionLabel,
+                        UpdatePhase.ERROR,
+                        error = "The downloaded update is not signed by the same key.",
+                    )
                     return@launch
                 }
                 stateFlow.value = UpdateUiState(versionLabel, UpdatePhase.READY)
