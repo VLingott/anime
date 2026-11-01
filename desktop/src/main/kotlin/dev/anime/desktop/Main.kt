@@ -64,6 +64,8 @@ private const val UA =
 
 
 private object Core {
+    val proxyToken: String = java.util.UUID.randomUUID().toString().replace("-", "")
+
     val proxyPort: Int = java.net.ServerSocket(
         0,
         0,
@@ -78,11 +80,22 @@ private object Core {
     val aniList: AniListSource by lazy { AniListSource(cacheDir) }
     val tvmaze: TvmazeEpisodesSource by lazy { TvmazeEpisodesSource() }
     val details: Details by lazy { Details(ctx) }
-    val hls: HlsProxy by lazy { HlsProxy(ctx, dir = System.getProperty("java.io.tmpdir") + "/anime-hls-cache") }
+    val hls: HlsProxy by lazy {
+        HlsProxy(
+            ctx,
+            dir = System.getProperty("java.io.tmpdir") + "/anime-hls-cache",
+            urlFor = { abs ->
+                "/api/hls?u=" + java.net.URLEncoder.encode(abs, Charsets.UTF_8) + "&k=" + proxyToken
+            },
+        )
+    }
     val playback: PlaybackService by lazy {
         PlaybackService(
             ctx, details,
-            urlTransform = { url -> "http://127.0.0.1:$proxyPort$url" },
+            urlTransform = { url ->
+                "http://127.0.0.1:$proxyPort$url" +
+                    (if (url.contains('?')) "&" else "?") + "k=" + proxyToken
+            },
             health = dev.anime.search.ProviderHealth(java.io.File(System.getProperty("java.io.tmpdir"), "anime-provider-health.json")),
             cacheDir = cacheDir,
         )
@@ -97,7 +110,11 @@ private object Core {
 
     class Proxy : NanoHTTPD("127.0.0.1", proxyPort) {
         override fun serve(session: IHTTPSession): Response {
-            if (!session.uri.startsWith("/api/hls")) return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "not found")
+            if (!session.uri.startsWith("/api/hls") ||
+                session.parameters["k"]?.firstOrNull() != proxyToken
+            ) {
+                return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "not found")
+            }
             val u = session.parameters["u"]?.firstOrNull()
             val link = session.parameters["link"]?.firstOrNull()
             val result = runBlocking {

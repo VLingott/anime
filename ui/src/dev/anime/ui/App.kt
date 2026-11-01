@@ -1420,6 +1420,7 @@ private fun DetailScreen(
     var refreshing by remember(id) { mutableStateOf(false) }
     var refreshTickLocal by remember(id) { mutableIntStateOf(0) }
     var showDesc by remember(id) { mutableStateOf(false) }
+    val detailListState = rememberLazyListState()
 
     deps.back.Back { onBack() }
 
@@ -1517,6 +1518,7 @@ private fun DetailScreen(
 
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.TopCenter) {
                     LazyColumn(
+                        state = detailListState,
                         modifier = Modifier.widthIn(max = 980.dp).fillMaxHeight().navigationBarsPadding(),
                         contentPadding = PaddingValues(bottom = 96.dp),
                     ) {
@@ -1708,6 +1710,19 @@ private fun DetailScreen(
                     }
                 }
             }
+        }
+
+        if (detailListState.firstVisibleItemIndex > 0 || detailListState.firstVisibleItemScrollOffset > 0) {
+            Box(
+                Modifier.align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(120.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.Black.copy(alpha = 0.92f), Color.Transparent),
+                        ),
+                    ),
+            )
         }
 
         playTarget?.let { (season, episode) ->

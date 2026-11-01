@@ -40,7 +40,7 @@ class PlaybackService(
     val health: ProviderHealth = ProviderHealth(),
 ) {
     private val hot = ConcurrentHashMap<String, PlayResponse>()
-    private val disk = cacheDir?.let { DiskCache(File(it, "play-v4"), PLAY_CACHE_BYTES) }
+    private val disk = cacheDir?.let { DiskCache(File(it, "play-v5"), PLAY_CACHE_BYTES) }
     private val resolutionDisk = cacheDir?.let { DiskCache(File(it, "resolutions"), 8L * 1024 * 1024) }
     private val cacheJson = Json { ignoreUnknownKeys = true }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -67,21 +67,21 @@ class PlaybackService(
             val cached = hot[key] ?: readDisk(key)?.also { hot[key] = it }
             if (cached != null) {
                 refreshInBackground(key, animeId, season, episode, absoluteEpisode, episodeTitle)
-                return cached
+                return present(cached)
             }
         }
 
         return locks.getOrPut(key) { Mutex() }.withLock {
             if (!forceRefresh) {
                 val cached = hot[key] ?: readDisk(key)?.also { hot[key] = it }
-                if (cached != null) return@withLock cached
+                if (cached != null) return@withLock present(cached)
             } else if (System.currentTimeMillis() - (lastResolvedAt[key] ?: 0L) < 5_000) {
                 val recent = hot[key] ?: readDisk(key)?.also { hot[key] = it }
-                if (recent != null) return@withLock recent
+                if (recent != null) return@withLock present(recent)
             }
-            resolveAndStore(key, animeId, season, episode, absoluteEpisode, episodeTitle).also {
-                if (it.sources.isNotEmpty()) lastResolvedAt[key] = System.currentTimeMillis()
-            }
+            val resolved = resolveAndStore(key, animeId, season, episode, absoluteEpisode, episodeTitle)
+            if (resolved.sources.isNotEmpty()) lastResolvedAt[key] = System.currentTimeMillis()
+            present(resolved)
         }
     }
 
@@ -154,15 +154,12 @@ class PlaybackService(
             return errorResponse
         }
 
-        val proxied = merged.map { source ->
-            if (source.url.startsWith("/api/hls")) source.copy(url = urlTransform(source.url)) else source
-        }
         val response = PlayResponse(
             id = animeId,
             title = detail.title?.english ?: detail.title?.romaji,
             season = season,
             episode = episode,
-            sources = proxied,
+            sources = merged,
         )
         hot[key] = response
         runCatching {
@@ -179,6 +176,15 @@ class PlaybackService(
     fun storeResolutions(url: String, resolutions: List<StreamResolution>) {
         if (resolutions.isEmpty()) return
         runCatching { resolutionDisk?.write(url, cacheJson.encodeToString(resolutions)) }
+    }
+
+    private fun present(response: PlayResponse): PlayResponse {
+        if (response.sources.isEmpty()) return response
+        return response.copy(
+            sources = response.sources.map { source ->
+                if (source.url.startsWith("/api/hls")) source.copy(url = urlTransform(source.url)) else source
+            },
+        )
     }
 
     private fun readDisk(key: String): PlayResponse? {

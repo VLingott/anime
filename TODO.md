@@ -11,7 +11,8 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Terminal error screen with reason + retry; update error dialog.
 - [x] Structured log file + uncaught-exception logging on Android and desktop (`anime.log`, 2 MB rotation). Add an in-app log viewer later.
 - [ ] Replace remaining silent `runCatching` paths with contextual logs.
-- [ ] Split play cache into long-lived capabilities (languages/resolutions) and short-lived URLs; validate URLs on use and keep stale entries only as fallback.
+- [x] Play cache stores provider URLs untransformed; proxy/device URLs are applied on every read (fixes stale ports/tokens).
+- [ ] Split play cache into long-lived capabilities (languages/resolutions) and short-lived URLs; validate URLs on use.
 - [x] Single-flight series loads.
 - [x] Single-flight play/prewarm/revalidation (per-key mutex + 5 s dedupe).
 - [x] Persist AniWorld season structure (24 h disk cache).
@@ -26,7 +27,7 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [ ] Android: persist player session across process death; handle audio becoming noisy and focus loss explicitly.
 - [x] Desktop HLS proxy uses a free localhost port.
 - [ ] Desktop: bundle libmpv with the tar (or detect and explain missing libmpv).
-- [ ] Remove fixed localhost HLS proxy if Media3/mpv can consume the custom source directly; otherwise authenticate/lock it down.
+- [x] Desktop HLS proxy requires a per-process random token in addition to binding localhost.
 - [ ] Make update checks tolerant of GitHub rate limits and keep a manual “Check for updates” action.
 
 ## P1 — product polish
