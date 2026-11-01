@@ -31,7 +31,7 @@ class SeriesRepository(
     cacheDir: File? = null,
 ) {
     private val cache = ByteLruCache<Long, SeriesView>(32L * 1024 * 1024, ::weight)
-    private val disk = cacheDir?.let { DiskCache(File(it, "series-v2"), 32L * 1024 * 1024) }
+    private val disk = cacheDir?.let { DiskCache(File(it, "series-v3"), 32L * 1024 * 1024) }
     private val json = Json { ignoreUnknownKeys = true }
     private val locks = java.util.concurrent.ConcurrentHashMap<Long, Mutex>()
 
@@ -112,6 +112,15 @@ class SeriesRepository(
             if (sum == target) {
                 return grouped.subList(start, end)
             }
+        }
+
+        val format = detail.format?.uppercase()
+        if (format == "SPECIAL" || format == "OVA" || format == "ONA") {
+            return listOf(1 to (1..target).map { n -> TvmazeEpisode(season = 1, number = n) })
+        }
+        val closest = grouped.minByOrNull { kotlin.math.abs(it.second.size - target) }
+        if (closest != null && closest.second.size >= target) {
+            return listOf(closest.first to closest.second.take(target))
         }
         return grouped
     }
