@@ -420,7 +420,7 @@ internal class MpvEngine(
                 label = null
             }
         }
-        if (found.size <= 1) return
+        if (found.isEmpty()) return
         val options = ArrayList<PlayerResolution>(found.size + 1)
         options += PlayerResolution("auto", "Auto", selected = true)
         found.forEach { (id, quality) -> options += PlayerResolution(id, quality) }

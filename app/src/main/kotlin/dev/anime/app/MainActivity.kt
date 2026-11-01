@@ -368,7 +368,7 @@ private fun parseResolutions(text: String): List<PlayerResolution> {
             label = null
         }
     }
-    if (found.size <= 1) return emptyList()
+    if (found.isEmpty()) return emptyList()
     return listOf(PlayerResolution("auto", "Auto", selected = true)) +
         found.map { (id, quality) -> PlayerResolution(id, quality) }
 }

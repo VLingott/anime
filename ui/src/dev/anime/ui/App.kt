@@ -1715,6 +1715,7 @@ private fun PlayerOverlay(deps: Deps, args: PlayerArgs, onClose: () -> Unit) {
     var failed by remember(args) { mutableStateOf(false) }
     var resumeFrom by remember(args) { mutableStateOf(deps.progress.resumeMs(args.id, args.season, args.episode)) }
     var session by remember(args) { mutableStateOf<PlayerSession?>(null) }
+    var sessionTag by remember(args) { mutableIntStateOf(-1) }
     var controlsVisible by remember(args) { mutableStateOf(true) }
     var poke by remember(args) { mutableIntStateOf(0) }
     var fullscreen by remember(args) { mutableStateOf(false) }
@@ -1895,6 +1896,7 @@ private fun PlayerOverlay(deps: Deps, args: PlayerArgs, onClose: () -> Unit) {
                     },
                 contentAlignment = Alignment.Center,
             ) {
+                val sourceTag = index
                 deps.player.Video(
                     url = source.url,
                     resumeMs = resumeFrom,
@@ -1932,9 +1934,15 @@ private fun PlayerOverlay(deps: Deps, args: PlayerArgs, onClose: () -> Unit) {
                             status = "All sources failed."
                         }
                     },
-                    onSession = {
-                        session = it
-                        if (status == "Switching language…" || status == "Switching source…") status = ""
+                    onSession = { newSession ->
+                        if (newSession != null) {
+                            session = newSession
+                            sessionTag = sourceTag
+                            if (status == "Switching language…" || status == "Switching source…") status = ""
+                        } else if (sessionTag == sourceTag) {
+                            session = null
+                            sessionTag = -1
+                        }
                     },
                 )
 
