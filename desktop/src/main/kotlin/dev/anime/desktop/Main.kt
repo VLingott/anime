@@ -149,6 +149,8 @@ private object DesktopProgress : dev.anime.ui.ProgressStore {
     override fun removeSeries(id: Long) = Progress.removeSeries(id)
     override fun audioPreference(id: Long) = Progress.audioPreference(id)
     override fun saveAudioPreference(id: Long, label: String?) = Progress.saveAudioPreference(id, label)
+    override fun defaultAudioLanguage() = Progress.defaultAudioLanguage()
+    override fun saveDefaultAudioLanguage(value: String) = Progress.saveDefaultAudioLanguage(value)
 }
 
 private object DesktopImages : ImageHost {
@@ -489,6 +491,7 @@ fun main() {
                     appVersion = appVersion,
                     updateChecker = DesktopUpdateChecker(appVersion),
                     clearCache = { CacheManager.clear(Core.cacheDir) },
+                    cacheBytes = { CacheManager.size(Core.cacheDir) },
                     openUrl = { url ->
                         runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(url)) }
                             .onFailure { AppLog.w("link", "Could not open $url", it) }

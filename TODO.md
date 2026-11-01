@@ -36,7 +36,8 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 ## P1 — product polish
 
 - [x] Settings: manual “Check for updates” with a one-minute client gate and GitHub rate-limit reset handling.
-- [ ] Settings screen: default audio language, title language, cache size/clear, providers, update channel, sync account.
+- [x] Settings: default title language, default audio language, cache size and clear.
+- [ ] Settings: provider toggles, update channel, sync account.
 - [ ] Subtitle track selection (including AniWorld GerSub) and subtitle styling.
 - [ ] Next episode / autoplay after end; “up next” card.
 - [ ] Buffering indicator and seek-preview thumbnails.
@@ -45,6 +46,7 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Recents: new-episode marker, sorting, fully-watched entries sorted last.
 - [x] Recents: long-press removal with confirmation (deletes recents + progress + audio preference).
 - [ ] Recents: hide without deleting, episode title in the row.
+- [x] Search: tags selectable like genres; genre/tag chips cycle include → exclude (red) → neutral.
 - [ ] Search: recent searches, clear button, result count, keyboard/DPAD focus order.
 - [ ] Accessibility: content descriptions/roles for all Canvas icons, focus states, screen-reader labels, minimum touch targets.
 - [ ] Localization/i18n for UI strings (German first), date/number formatting.

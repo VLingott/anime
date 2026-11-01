@@ -253,6 +253,8 @@ interface ImageHost {
 
 enum class TitleLanguage { ROMAJI, ENGLISH, NATIVE }
 
+private val AudioLanguages = listOf("Japanese", "English", "German")
+
 data class LastPlayed(val season: Int, val episode: Int, val positionMs: Long)
 
 interface ProgressStore {
@@ -264,6 +266,8 @@ interface ProgressStore {
     fun saveAudioPreference(id: Long, label: String?) {}
     fun titleLanguage(): Int = 0
     fun saveTitleLanguage(value: Int) {}
+    fun defaultAudioLanguage(): String = "Japanese"
+    fun saveDefaultAudioLanguage(value: String) {}
     fun removeSeries(id: Long) {}
 }
 
@@ -278,6 +282,7 @@ data class Deps(
     val appVersion: String = "0.1",
     val updateChecker: UpdateChecker = NoopUpdateChecker,
     val clearCache: () -> Unit = {},
+    val cacheBytes: () -> Long = { 0L },
 )
 
 data class SearchFilters(
@@ -510,6 +515,10 @@ fun App(deps: Deps) {
                     deps = deps,
                     refreshTick = refreshTick,
                     titleLanguage = titleLanguage,
+                    onSetTitleLanguage = { next ->
+                        titleLanguage = next
+                        deps.progress.saveTitleLanguage(next.ordinal)
+                    },
                     onSearch = { searchMode = true },
                     onResume = { recent ->
                         player = PlayerArgs(
@@ -551,6 +560,7 @@ private fun HomeScreen(
     deps: Deps,
     refreshTick: Int,
     titleLanguage: TitleLanguage,
+    onSetTitleLanguage: (TitleLanguage) -> Unit,
     onSearch: () -> Unit,
     onResume: (RecentSeries) -> Unit,
 ) {
@@ -560,6 +570,11 @@ private fun HomeScreen(
     var pendingRemoval by remember { mutableStateOf<RecentSeries?>(null) }
     var showSettings by remember { mutableStateOf(false) }
     val updateStatus by deps.updateChecker.status.collectAsState()
+    var defaultAudio by remember { mutableStateOf(deps.progress.defaultAudioLanguage()) }
+    var cacheBytes by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(showSettings) {
+        if (showSettings) cacheBytes = withContext(Dispatchers.IO) { deps.cacheBytes() }
+    }
 
     val items = remember(recents, sort, titleLanguage) {
         recents.map { recent ->
@@ -671,7 +686,11 @@ private fun HomeScreen(
                 color = Color(0xFF0C0C0C),
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
             ) {
-                Column(Modifier.padding(20.dp)) {
+                Column(
+                    Modifier.heightIn(max = 560.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(20.dp),
+                ) {
                     Text("Settings", color = Color(0xFFF5F5F2), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     Text("Anime ${deps.appVersion}", color = Color(0xFF9B9B96), fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
                     Text(
@@ -691,6 +710,23 @@ private fun HomeScreen(
                         lineHeight = 15.sp,
                         modifier = Modifier.padding(top = 8.dp),
                     )
+                    Label("TITLE LANGUAGE")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TitleLanguage.entries.forEach { language ->
+                            Chip(titleLanguageLabel(language), selected = titleLanguage == language) {
+                                onSetTitleLanguage(language)
+                            }
+                        }
+                    }
+                    Label("DEFAULT AUDIO LANGUAGE")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        AudioLanguages.forEach { language ->
+                            Chip(language, selected = defaultAudio == language) {
+                                defaultAudio = language
+                                deps.progress.saveDefaultAudioLanguage(language)
+                            }
+                        }
+                    }
                     Text(
                         "Clear cached data",
                         color = Color(0xFFF5F5F2),
@@ -700,16 +736,23 @@ private fun HomeScreen(
                             .background(Color(0xFF151515))
                             .clickable {
                                 deps.clearCache()
+                                cacheBytes = 0L
                                 showSettings = false
                             }
                             .padding(horizontal = 16.dp, vertical = 9.dp),
+                    )
+                    Text(
+                        "Metadata cache: " + formatCacheBytes(cacheBytes),
+                        color = Color(0xFF9B9B96),
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 6.dp),
                     )
                     Text(
                         "Removes search, series, stream and image metadata caches. Progress is kept.",
                         color = Color(0xFF9B9B96),
                         fontSize = 11.sp,
                         lineHeight = 15.sp,
-                        modifier = Modifier.padding(top = 8.dp),
+                        modifier = Modifier.padding(top = 4.dp),
                     )
                     Row(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalArrangement = Arrangement.End) {
                         Text(
@@ -1473,6 +1516,19 @@ private fun SearchRow(deps: Deps, hit: SearchHit, titleLanguage: TitleLanguage, 
             }
         }
     }
+}
+
+private fun formatCacheBytes(bytes: Long?): String = when {
+    bytes == null -> "calculating…"
+    bytes < 1024L -> "$bytes B"
+    bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
+    else -> "${bytes / (1024L * 1024L)} MB"
+}
+
+private fun titleLanguageLabel(language: TitleLanguage): String = when (language) {
+    TitleLanguage.ROMAJI -> "Romaji"
+    TitleLanguage.ENGLISH -> "English"
+    TitleLanguage.NATIVE -> "Native"
 }
 
 private fun displayTitle(d: DetailResult, language: TitleLanguage): String = when (language) {
@@ -2304,7 +2360,7 @@ private fun PlayerOverlay(
     val activeLanguage = session?.let { active ->
         active.audioTracks.firstOrNull { it.id == active.activeAudioId }
             ?.let { languageLabelFor(it, currentSource) }
-    } ?: deps.progress.audioPreference(args.id) ?: "Japanese"
+    } ?: deps.progress.audioPreference(args.id) ?: deps.progress.defaultAudioLanguage()
     val titleSource = sources.firstOrNull {
         it.episodeTitleGerman != null || it.episodeTitleEnglish != null
     } ?: currentSource
@@ -2351,7 +2407,7 @@ private fun PlayerOverlay(
             }.getOrNull()
         }
         sources = resp?.sources.orEmpty()
-        val preferred = deps.progress.audioPreference(args.id) ?: "Japanese"
+        val preferred = deps.progress.audioPreference(args.id) ?: deps.progress.defaultAudioLanguage()
         val preferredIndex = sources.indexOfFirst { source ->
             source.languages.any { it.equals(preferred, ignoreCase = true) }
         }
@@ -2380,7 +2436,7 @@ private fun PlayerOverlay(
                 val newLanguages = fresh.sources.flatMap { it.languages }.toSet()
                 if (newLanguages.size > oldLanguages.size && newLanguages.containsAll(oldLanguages)) {
                     val position = session?.positionMs ?: resumeFrom
-                    val preferred = deps.progress.audioPreference(args.id) ?: "Japanese"
+                    val preferred = deps.progress.audioPreference(args.id) ?: deps.progress.defaultAudioLanguage()
                     val targetIndex = fresh.sources.indexOfFirst { source ->
                         source.languages.any { it.equals(preferred, ignoreCase = true) }
                     }
@@ -2394,7 +2450,7 @@ private fun PlayerOverlay(
 
     LaunchedEffect(session?.audioTracks, sources, index) {
         val current = session ?: return@LaunchedEffect
-        val preferred = deps.progress.audioPreference(args.id) ?: "Japanese"
+        val preferred = deps.progress.audioPreference(args.id) ?: deps.progress.defaultAudioLanguage()
         val source = sources.getOrNull(index)
         val track = current.audioTracks.firstOrNull {
             languageLabelFor(it, source).equals(preferred, ignoreCase = true)

@@ -147,6 +147,9 @@ private fun androidDeps(activity: MainActivity): Deps = Deps(
     clearCache = {
         CacheManager.clear(java.io.File(activity.filesDir, "anime-cache"))
     },
+    cacheBytes = {
+        CacheManager.size(java.io.File(activity.filesDir, "anime-cache"))
+    },
 )
 
 private object AndroidBackHost : BackHost {

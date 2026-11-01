@@ -21,6 +21,12 @@ object CacheManager {
         }
     }
 
+    fun size(root: File): Long = runCatching {
+        directories.sumOf { name ->
+            File(root, name).walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        }
+    }.getOrDefault(0L)
+
     fun clear(root: File) {
         runCatching {
             root.mkdirs()

@@ -27,6 +27,10 @@ object Progress {
 
     fun saveTitleLanguage(value: Int) = prefs.putInt("ui:titleLanguage", value)
 
+    fun defaultAudioLanguage(): String = prefs.get("ui:defaultAudio", "Japanese") ?: "Japanese"
+
+    fun saveDefaultAudioLanguage(value: String) = prefs.put("ui:defaultAudio", value)
+
     fun audioPreference(id: Long): String? = prefs.get("$id:audio", null)
 
     fun saveAudioPreference(id: Long, label: String?) {

@@ -28,6 +28,22 @@ class CacheTest {
     }
 
     @Test
+    fun cacheManagerCountsNestedFiles() {
+        val dir = Files.createTempDirectory("anime-cache-size").toFile()
+        try {
+            dir.resolve("search/nested").mkdirs()
+            dir.resolve("search/a.bin").writeBytes(ByteArray(3))
+            dir.resolve("search/nested/b.bin").writeBytes(ByteArray(7))
+
+            assertEquals(10L, CacheManager.size(dir))
+            CacheManager.clear(dir)
+            assertEquals(0L, CacheManager.size(dir))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun diskCacheTrimsToBudgetAndReads() {
         val dir = Files.createTempDirectory("anime-cache-test").toFile()
         try {

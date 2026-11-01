@@ -42,6 +42,12 @@ object ProgressStore : dev.anime.ui.ProgressStore {
         prefs.edit().putInt("ui:titleLanguage", value).apply()
     }
 
+    override fun defaultAudioLanguage(): String = prefs.getString("ui:defaultAudio", "Japanese") ?: "Japanese"
+
+    override fun saveDefaultAudioLanguage(value: String) {
+        prefs.edit().putString("ui:defaultAudio", value).apply()
+    }
+
     override fun audioPreference(id: Long): String? = prefs.getString("$id:audio", null)
 
     override fun saveAudioPreference(id: Long, label: String?) {
