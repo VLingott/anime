@@ -1798,7 +1798,7 @@ private fun PlayerOverlay(
     deps.back.Back { onClose() }
     var sources by remember(args) { mutableStateOf<List<PlaySource>>(emptyList()) }
     var index by remember(args) { mutableStateOf(0) }
-    var status by remember(args) { mutableStateOf("Resolving stream…") }
+    var status by remember(args) { mutableStateOf("") }
     var failed by remember(args) { mutableStateOf(false) }
     var resumeFrom by remember(args) { mutableStateOf(deps.progress.resumeMs(args.id, args.season, args.episode)) }
     var session by remember(args) { mutableStateOf<PlayerSession?>(null) }
@@ -2058,19 +2058,16 @@ private fun PlayerOverlay(
                             sameLanguage != null -> {
                                 index = sameLanguage
                                 resumeFrom = resumeAt
-                                status = "Reconnecting…"
                             }
                             !refreshedOnce && currentLanguage != null -> {
                                 refreshedOnce = true
                                 resumeFrom = resumeAt
                                 resolveAttempt += 1
-                                status = "Refreshing stream…"
                                 failed = false
                             }
                             anyLanguage != null -> {
                                 index = anyLanguage
                                 resumeFrom = resumeAt
-                                status = "Reconnecting…"
                             }
                             else -> {
                                 failed = true
@@ -2081,7 +2078,6 @@ private fun PlayerOverlay(
                     onSession = { newSession ->
                         if (newSession != null) {
                             session = newSession
-                            if (status == "Switching language…" || status == "Switching source…") status = ""
                         }
                     },
                 )
@@ -2142,7 +2138,6 @@ private fun PlayerOverlay(
                                     val position = current.positionMs
                                     pendingResolution = option.label
                                     controlsVisible = true
-                                    status = "Switching source…"
                                     scope.launch {
                                         kotlinx.coroutines.delay(160)
                                         resumeFrom = position
@@ -2158,7 +2153,6 @@ private fun PlayerOverlay(
                                     val targetIndex = language.sourceIndex
                                     val position = current.positionMs
                                     controlsVisible = true
-                                    status = "Switching language…"
                                     scope.launch {
                                         kotlinx.coroutines.delay(160)
                                         resumeFrom = position
@@ -2169,16 +2163,6 @@ private fun PlayerOverlay(
                             modifier = Modifier.align(Alignment.BottomCenter),
                         )
                     }
-                }
-                if (status.isNotBlank()) {
-                    Text(
-                        status,
-                        color = Color(0xFF9B9B96),
-                        fontSize = 12.sp,
-                        modifier = Modifier.align(Alignment.TopCenter)
-                            .then(if (fullscreen) Modifier else Modifier.statusBarsPadding())
-                            .padding(top = if (fullscreen) 16.dp else 78.dp),
-                    )
                 }
             }
         }
