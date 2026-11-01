@@ -49,6 +49,15 @@ object ProgressStore : dev.anime.ui.ProgressStore {
         else prefs.edit().putString("$id:audio", label).apply()
     }
 
+    override fun removeSeries(id: Long) {
+        val prefix = "$id:"
+        val edit = prefs.edit()
+        for (key in prefs.all.keys) {
+            if (key.startsWith(prefix)) edit.remove(key)
+        }
+        edit.apply()
+    }
+
     override fun last(id: Long): LastPlayed? {
         val raw = prefs.getString("$id:last", null)
         if (raw != null) {

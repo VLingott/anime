@@ -124,6 +124,7 @@ private object DesktopProgress : dev.anime.ui.ProgressStore {
     override fun last(id: Long) = Progress.last(id)
     override fun titleLanguage() = Progress.titleLanguage()
     override fun saveTitleLanguage(value: Int) = Progress.saveTitleLanguage(value)
+    override fun removeSeries(id: Long) = Progress.removeSeries(id)
     override fun audioPreference(id: Long) = Progress.audioPreference(id)
     override fun saveAudioPreference(id: Long, label: String?) = Progress.saveAudioPreference(id, label)
 }

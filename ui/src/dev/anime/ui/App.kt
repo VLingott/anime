@@ -270,6 +270,7 @@ interface ProgressStore {
     fun saveAudioPreference(id: Long, label: String?) {}
     fun titleLanguage(): Int = 0
     fun saveTitleLanguage(value: Int) {}
+    fun removeSeries(id: Long) {}
 }
 
 data class Deps(
@@ -526,8 +527,10 @@ private fun HomeScreen(
     onSearch: () -> Unit,
     onResume: (RecentSeries) -> Unit,
 ) {
-    val recents = remember(refreshTick) { deps.recents?.list().orEmpty() }
+    var localTick by remember { mutableIntStateOf(0) }
+    val recents = remember(refreshTick, localTick) { deps.recents?.list().orEmpty() }
     var sort by remember { mutableStateOf(HomeSort.RECENT) }
+    var pendingRemoval by remember { mutableStateOf<RecentSeries?>(null) }
 
     val items = remember(recents, sort, titleLanguage) {
         recents.map { recent ->
@@ -623,7 +626,59 @@ private fun HomeScreen(
                         newEpisodes = entry.newEpisodes,
                         fullyWatched = entry.fullyWatched,
                         onResume = onResume,
+                        onLongPress = { pendingRemoval = entry.recent },
                     )
+                }
+            }
+        }
+    }
+
+    val removal = pendingRemoval
+    if (removal != null) {
+        Dialog(onDismissRequest = { pendingRemoval = null }) {
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = Color(0xFF0C0C0C),
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+            ) {
+                Column(Modifier.padding(20.dp)) {
+                    Text("Remove from history?", color = Color(0xFFF5F5F2), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Watch progress and history for ${removal.title} will be deleted.",
+                        color = Color(0xFF9B9B96),
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 18.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "Cancel",
+                            color = Color(0xFF9B9B96),
+                            fontSize = 13.sp,
+                            modifier = Modifier.clickable { pendingRemoval = null }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                        Text(
+                            "Remove",
+                            color = Color(0xFFF5F5F2),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 8.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color(0xFF2A1515))
+                                .clickable {
+                                    deps.recents?.remove(removal.id)
+                                    deps.progress.removeSeries(removal.id)
+                                    pendingRemoval = null
+                                    localTick += 1
+                                }
+                                .padding(horizontal = 18.dp, vertical = 9.dp),
+                        )
+                    }
                 }
             }
         }
@@ -663,6 +718,7 @@ private fun RecentRow(
     newEpisodes: Boolean,
     fullyWatched: Boolean,
     onResume: (RecentSeries) -> Unit,
+    onLongPress: () -> Unit,
 ) {
     val cachedDetail = remember(recent.id) { deps.core.series.peek(recent.id)?.detail }
     val displayRecentTitle = cachedDetail?.let { displayTitle(it, titleLanguage) } ?: recent.title
@@ -674,7 +730,12 @@ private fun RecentRow(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(Color(0xFF0C0C0C))
-            .clickable { onResume(recent) }
+            .pointerInput(recent.id) {
+                detectTapGestures(
+                    onTap = { onResume(recent) },
+                    onLongPress = { onLongPress() },
+                )
+            }
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

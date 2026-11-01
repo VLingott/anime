@@ -34,7 +34,8 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Android PiP (automatic when leaving while playing).
 - [ ] Player volume/brightness gestures, playback speed, explicit PiP button.
 - [x] Recents: new-episode marker, sorting, fully-watched entries sorted last.
-- [ ] Recents: remove/hide entries, episode title in the row.
+- [x] Recents: long-press removal with confirmation (deletes recents + progress + audio preference).
+- [ ] Recents: hide without deleting, episode title in the row.
 - [ ] Search: recent searches, clear button, result count, keyboard/DPAD focus order.
 - [ ] Accessibility: content descriptions/roles for all Canvas icons, focus states, screen-reader labels, minimum touch targets.
 - [ ] Localization/i18n for UI strings (German first), date/number formatting.

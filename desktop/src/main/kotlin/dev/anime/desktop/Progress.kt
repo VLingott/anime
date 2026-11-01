@@ -60,6 +60,16 @@ object Progress {
         return best
     }
 
+    fun removeSeries(id: Long) {
+        val prefix = "$id:"
+        runCatching {
+            for (key in prefs.keys()) {
+                if (key.startsWith(prefix)) prefs.remove(key)
+            }
+        }
+        runCatching { prefs.flush() }
+    }
+
     fun fraction(id: Long, season: Int, episode: Int): Float? {
         val raw = prefs.get(key(id, season, episode), null) ?: return null
         val pos = raw.substringBefore('|').toLongOrNull() ?: return null

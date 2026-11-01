@@ -23,6 +23,7 @@ data class RecentSeries(
 interface RecentsStore {
     fun list(): List<RecentSeries>
     fun record(entry: RecentSeries)
+    fun remove(id: Long)
 }
 
 class FileRecentsStore(private val file: File, private val limit: Int = 20) : RecentsStore {
@@ -38,6 +39,13 @@ class FileRecentsStore(private val file: File, private val limit: Int = 20) : Re
         list.add(0, entry.copy(updatedAt = entry.updatedAt.takeIf { it > 0 } ?: System.currentTimeMillis()))
         while (list.size > limit) list.removeAt(list.lastIndex)
         save(list)
+    }
+
+    @Synchronized
+    override fun remove(id: Long) {
+        val list = load()
+        if (list.none { it.id == id }) return
+        save(list.filterNot { it.id == id })
     }
 
     private fun load(): MutableList<RecentSeries> = runCatching {
