@@ -72,9 +72,10 @@ class TvmazeEpisodesSource : StreamSource {
             val target = norm(q)
             val matched = anime.filter {
                 val n = norm(it.name)
-                n.isNotEmpty() && (n == target || n.contains(target) || target.contains(n))
+                n.isNotEmpty() && target.length >= 4 && n.length >= 4 &&
+                    (n == target || n.contains(target) || target.contains(n))
             }
-            (rank(matched).ifEmpty { rank(anime) }).firstOrNull()?.let { return it }
+            rank(matched).firstOrNull()?.let { return it }
         }
 
         for ((q, shows) in perName) {

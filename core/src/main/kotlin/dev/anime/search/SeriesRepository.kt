@@ -3,6 +3,7 @@ package dev.anime.search
 import dev.anime.cache.ByteLruCache
 import dev.anime.cache.DiskCache
 import dev.anime.model.DetailResult
+
 import dev.anime.source.SourceContext
 import dev.anime.source.TvmazeEpisode
 import dev.anime.source.TvmazeEpisodesSource
@@ -50,7 +51,14 @@ class SeriesRepository(
             val detail = details.byId(id.toString()) ?: return@withLock null
             val seasons = if (detail.format != "MOVIE") {
                 val names = listOfNotNull(detail.title?.romaji, detail.title?.english, detail.title?.native) + detail.synonyms
-                val show = tvmaze.findShow(names, detail.seasonYear, ctx)
+                val searchNames = names.flatMap { name ->
+                    listOf(
+                        name,
+                        name.substringBefore(':').trim(),
+                        name.replace(Regex("(?i)\\b(\\d+(st|nd|rd|th)\\s+season|season\\s+\\d+|part\\s+\\d+|cour\\s+\\d+)\\b"), " ").trim(),
+                    )
+                }.filter { it.length >= 2 }.distinctBy { it.lowercase() }
+                val show = tvmaze.findShow(searchNames, detail.seasonYear, ctx)
                 val grouped = if (show != null) {
                     tvmaze.episodes(show.id, ctx)
                         .filter { it.number != null }
@@ -58,7 +66,7 @@ class SeriesRepository(
                         .toSortedMap()
                         .map { (season, list) -> season to list.sortedBy { it.number } }
                 } else emptyList()
-                grouped.ifEmpty {
+                selectSeasons(detail, grouped).ifEmpty {
                     val count = detail.episodes ?: 0
                     if (count > 0) listOf(1 to (1..count).map { n -> TvmazeEpisode(season = 1, number = n) }) else emptyList()
                 }
@@ -69,6 +77,43 @@ class SeriesRepository(
             disk?.write(id.toString(), json.encodeToString(CachedSeries(detail, seasons)))
             view
         }
+    }
+
+    private fun selectSeasons(
+        detail: DetailResult,
+        grouped: List<Pair<Int, List<TvmazeEpisode>>>,
+    ): List<Pair<Int, List<TvmazeEpisode>>> {
+        val target = detail.episodes ?: return grouped
+        if (grouped.size <= 1 || target <= 0) return grouped
+        if (grouped.size > 12) return grouped
+        if (grouped.all { it.first >= 1900 }) return grouped
+
+        fun seasonYear(episodes: List<TvmazeEpisode>): Int? = episodes
+            .mapNotNull { it.airdate?.take(4)?.toIntOrNull() }
+            .minOrNull()
+
+        fun distance(episodes: List<TvmazeEpisode>): Int {
+            val wanted = detail.seasonYear ?: return 0
+            val actual = seasonYear(episodes) ?: return 9_999
+            return kotlin.math.abs(actual - wanted)
+        }
+
+        val exact = grouped.filter { it.second.size == target }
+            .minByOrNull { distance(it.second) }
+        if (exact != null) return listOf(exact.first to exact.second)
+
+        for (start in grouped.indices) {
+            var sum = 0
+            var end = start
+            while (end < grouped.size && sum < target) {
+                sum += grouped[end].second.size
+                end++
+            }
+            if (sum == target) {
+                return grouped.subList(start, end)
+            }
+        }
+        return grouped
     }
 
     private fun weight(view: SeriesView): Long {
