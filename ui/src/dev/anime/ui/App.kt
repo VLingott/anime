@@ -42,6 +42,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -194,6 +197,7 @@ interface PlayerSession {
 }
 
 interface PlayerHost {
+    val pictureInPicture: StateFlow<Boolean>
     fun onScreenShown()
     fun onScreenHidden()
     fun setFullscreen(fullscreen: Boolean) {}
@@ -1008,14 +1012,10 @@ private fun SearchScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var tagCatalog by remember { mutableStateOf<List<AniListTag>>(emptyList()) }
     var tagLoading by remember { mutableStateOf(false) }
-    var tagQuery by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
     LaunchedEffect(filters.showFilters) {
-        if (!filters.showFilters) {
-            tagQuery = ""
-            return@LaunchedEffect
-        }
+        if (!filters.showFilters) return@LaunchedEffect
         if (tagCatalog.isNotEmpty() || tagLoading) return@LaunchedEffect
         tagLoading = true
         tagCatalog = withContext(Dispatchers.IO) {
@@ -1030,17 +1030,6 @@ private fun SearchScreen(
             .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
             .map { it.key }
         (filters.tags.sorted() + filters.excludedTags.sorted() + popular).distinct()
-    }
-    val tagOptions = remember(tagCatalog, fallbackTags, tagQuery, filters.tags, filters.excludedTags, includeAdult) {
-        val selected = filters.tags + filters.excludedTags
-        val catalog = tagCatalog
-            .filter { includeAdult || !it.adult }
-            .map { it.name }
-        val source = if (catalog.isNotEmpty()) catalog else fallbackTags
-        val query = tagQuery.trim()
-        (source + selected).distinct().filter { tag ->
-            query.isEmpty() || tag in selected || tag.contains(query, ignoreCase = true)
-        }
     }
     val hasFilters = filters.genres.isNotEmpty() || filters.excludedGenres.isNotEmpty() ||
         filters.tags.isNotEmpty() || filters.excludedTags.isNotEmpty() || filters.minScore > 0 ||
@@ -1142,9 +1131,9 @@ private fun SearchScreen(
         if (filters.showFilters) {
             FiltersOverlay(
                 filters = filters,
-                tagOptions = tagOptions,
-                tagQuery = tagQuery,
-                onTagQuery = { tagQuery = it },
+                tagCatalog = tagCatalog,
+                fallbackTags = fallbackTags,
+                includeAdult = includeAdult,
                 loadingTags = tagLoading,
                 onFilters = onFilters,
                 onDismiss = { onFilters(filters.copy(showFilters = false)) },
@@ -1333,13 +1322,26 @@ private fun SortIconButton(filters: SearchFilters, onFilters: (SearchFilters) ->
 @Composable
 private fun FiltersOverlay(
     filters: SearchFilters,
-    tagOptions: List<String>,
-    tagQuery: String,
-    onTagQuery: (String) -> Unit,
+    tagCatalog: List<AniListTag>,
+    fallbackTags: List<String>,
+    includeAdult: Boolean,
     loadingTags: Boolean,
     onFilters: (SearchFilters) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var tagQuery by remember { mutableStateOf("") }
+    val tagOptions = remember(tagCatalog, fallbackTags, tagQuery, filters.tags, filters.excludedTags, includeAdult) {
+        val selected = filters.tags + filters.excludedTags
+        val catalog = tagCatalog
+            .filter { includeAdult || !it.adult }
+            .map { it.name }
+        val source = if (catalog.isNotEmpty()) catalog else fallbackTags
+        val query = tagQuery.trim()
+        (source + selected).distinct().filter { tag ->
+            query.isEmpty() || tag in selected || tag.contains(query, ignoreCase = true)
+        }
+    }
+
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(20.dp),
@@ -1364,7 +1366,7 @@ private fun FiltersOverlay(
                     filters = filters,
                     tagOptions = tagOptions,
                     tagQuery = tagQuery,
-                    onTagQuery = onTagQuery,
+                    onTagQuery = { tagQuery = it },
                     loadingTags = loadingTags,
                     onFilters = onFilters,
                     modifier = Modifier.weight(1f)
@@ -1434,12 +1436,18 @@ private fun FilterPanel(
                 modifier = Modifier.padding(top = 2.dp),
             )
         } else {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                tagOptions.forEach { tag ->
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 110.dp),
+                modifier = Modifier.fillMaxWidth().height(240.dp).padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                gridItems(tagOptions, key = { it }) { tag ->
                     Chip(
                         tag,
                         selected = tag in filters.tags,
                         excluded = tag in filters.excludedTags,
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
                         val (included, excluded) = cycleFilter(filters.tags, filters.excludedTags, tag)
                         onFilters(filters.copy(tags = included, excludedTags = excluded))
@@ -1552,7 +1560,13 @@ private fun SortSelector(filters: SearchFilters, onFilters: (SearchFilters) -> U
 }
 
 @Composable
-private fun Chip(text: String, selected: Boolean, excluded: Boolean = false, onClick: () -> Unit) {
+private fun Chip(
+    text: String,
+    selected: Boolean,
+    excluded: Boolean = false,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
     val shape = RoundedCornerShape(999.dp)
     Text(
         text,
@@ -1563,7 +1577,9 @@ private fun Chip(text: String, selected: Boolean, excluded: Boolean = false, onC
         },
         fontSize = 11.sp,
         fontWeight = FontWeight.SemiBold,
-        modifier = Modifier
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier
             .clip(shape)
             .background(
                 when {
@@ -2490,6 +2506,7 @@ private fun PlayerOverlay(
     var probedResolutions by remember(args) { mutableStateOf<Map<String, List<PlayerResolution>>>(emptyMap()) }
     var pendingResolution by remember(args) { mutableStateOf<String?>(null) }
     var playerError by remember(args) { mutableStateOf<String?>(null) }
+    val inPictureInPicture by deps.player.pictureInPicture.collectAsState()
     val focus = remember { FocusRequester() }
 
     val headerDetail = remember(args.id) { deps.core.series.peek(args.id)?.detail }
@@ -2525,6 +2542,9 @@ private fun PlayerOverlay(
     }
 
     LaunchedEffect(args) { runCatching { focus.requestFocus() } }
+    LaunchedEffect(inPictureInPicture) {
+        if (inPictureInPicture) controlsVisible = false
+    }
 
     LaunchedEffect(args, resolveAttempt) {
         deps.recents?.record(
@@ -2825,7 +2845,7 @@ private fun PlayerOverlay(
                 )
 
                 val current = session
-                if (controlsVisible) {
+                if (controlsVisible && !inPictureInPicture) {
                     if (!fullscreen) {
                         Row(
                             Modifier.align(Alignment.TopCenter)

@@ -186,6 +186,8 @@ private object DesktopImages : ImageHost {
 private class DesktopPlayerHost(
     private val onFullscreen: (Boolean) -> Unit,
 ) : PlayerHost {
+    override val pictureInPicture = kotlinx.coroutines.flow.MutableStateFlow(false)
+
     override fun onScreenShown() = Unit
     override fun onScreenHidden() = Unit
 

@@ -35,18 +35,20 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 
 ## P1 — product polish
 
+- [x] Android player hides system bars and the gesture handle; immersive mode restores on exit.
 - [x] Settings: manual “Check for updates” with a one-minute client gate and GitHub rate-limit reset handling.
 - [x] Settings: default title language, default audio language, adult-content filtering, cache size and clear.
 - [ ] Settings: provider toggles, update channel, sync account.
 - [ ] Subtitle track selection (including AniWorld GerSub) and subtitle styling.
 - [ ] Next episode / autoplay after end; “up next” card.
 - [ ] Buffering indicator and seek-preview thumbnails.
-- [x] Android PiP (automatic when leaving while playing).
+- [x] Android PiP (automatic when leaving while playing; in-app controls hidden, system PiP controls stay).
 - [ ] Player volume/brightness gestures, playback speed, explicit PiP button.
 - [x] Recents: new-episode marker, sorting, fully-watched entries sorted last.
 - [x] Recents: long-press removal with confirmation (deletes recents + progress + audio preference).
 - [ ] Recents: hide without deleting, episode title in the row.
 - [x] Search: tags selectable like genres, searchable full AniList tag catalog, multi-row overlay filter dialog; chips cycle include → exclude (red) → neutral; adult tags hidden with the adult filter.
+- [x] Search: tag catalog uses a lazy grid and local overlay state, so typing in tag search does not recompose the results screen.
 - [ ] Search: recent searches, clear button, result count, keyboard/DPAD focus order.
 - [ ] Accessibility: content descriptions/roles for all Canvas icons, focus states, screen-reader labels, minimum touch targets.
 - [ ] Localization/i18n for UI strings (German first), date/number formatting.

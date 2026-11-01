@@ -5,6 +5,7 @@ import android.content.Context
 import android.app.PictureInPictureParams
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.widget.Toast
 import android.net.Uri
 import android.util.Rational
@@ -98,6 +99,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        playerHost.setPictureInPicture(isInPictureInPictureMode)
+        if (!isInPictureInPictureMode && playerHost.isActive) playerHost.applyImmersive()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
@@ -169,29 +176,34 @@ private object AndroidImages : ImageHost {
 internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
     var isActive: Boolean = false
         private set
+    private val pipFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+    override val pictureInPicture = pipFlow
+
+    fun setPictureInPicture(value: Boolean) {
+        pipFlow.value = value
+    }
 
     override fun onScreenShown() {
         isActive = true
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        insets().hide(WindowInsetsCompat.Type.statusBars())
+        applyImmersive()
     }
 
     override fun onScreenHidden() {
         isActive = false
+        pipFlow.value = false
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        setFullscreen(false)
         insets().show(WindowInsetsCompat.Type.systemBars())
     }
 
     override fun setFullscreen(fullscreen: Boolean) {
+        applyImmersive()
+    }
+
+    fun applyImmersive() {
         val controller = insets()
-        if (fullscreen) {
-            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            controller.hide(WindowInsetsCompat.Type.systemBars())
-        } else {
-            controller.show(WindowInsetsCompat.Type.navigationBars())
-            controller.hide(WindowInsetsCompat.Type.statusBars())
-        }
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
     }
 
     private fun insets() = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
