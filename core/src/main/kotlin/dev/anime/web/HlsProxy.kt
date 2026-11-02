@@ -2,6 +2,7 @@ package dev.anime.web
 
 import dev.anime.source.SourceContext
 import dev.anime.util.AppLog
+import dev.anime.source.play.AllAnimeProvider
 import dev.anime.source.play.FlixCloud
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -110,10 +111,25 @@ class HlsProxy(
         return Result.FileData(file, contentType)
     }
 
-    /** Origin/referer per upstream host; hanime rejects and times out other hosts. */
+    /** Origin/referer per upstream host; some CDNs time out or stub out others. */
     internal fun headersFor(url: String): Pair<String, String> = when {
+        isAllAnimeHost(url) -> AllAnimeProvider.Cfg.REFERER to AllAnimeProvider.Cfg.REFERER + "/"
+        isOkRuHost(url) -> "https://ok.ru" to "https://ok.ru/"
         isHanimeHost(url) -> "https://hanime.tv" to "https://hanime.tv/"
         else -> FlixCloud.BASE to FlixCloud.BASE + "/"
+    }
+
+    private fun isOkRuHost(url: String): Boolean {
+        val host = runCatching { URI(url).host.orEmpty().lowercase() }.getOrDefault("")
+        return host == "ok.ru" || host.endsWith(".ok.ru") ||
+            host == "okcdn.ru" || host.endsWith(".okcdn.ru")
+    }
+
+    private fun isAllAnimeHost(url: String): Boolean {
+        val host = runCatching { URI(url).host.orEmpty().lowercase() }.getOrDefault("")
+        return host == "allanime.day" || host.endsWith(".allanime.day") ||
+            host == "mkissa.net" || host.endsWith(".mkissa.net") ||
+            host == "mkissa.to" || host.endsWith(".mkissa.to")
     }
 
     private fun isHanimeHost(url: String): Boolean {

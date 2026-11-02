@@ -2,7 +2,7 @@
 
 Native anime app with one shared Kotlin/Compose UI for Android and Linux desktop.
 
-- Providers: AniWorld (German), Re:ANIME (Japanese/English), hanime.tv (adult only)
+- Providers: AniWorld (German), Re:ANIME (Japanese/English), hanime.tv (adult only), AllAnime (rotating crypto; self-heals from a remote config when the site rotates)
 - HLS playback: Media3 on Android, libmpv on desktop
 - Persistent caches: search page 1, series views, play sources, HLS segments, images
 - Unified language + resolution menus with automatic stream switching

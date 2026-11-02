@@ -82,8 +82,9 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 ## Known issues / notes
 
 - Android releases are debug-signed; changing the keystore breaks in-place updates.
-- Provider scrapers (AniWorld/VOE/Vidmoly, Re:ANIME/FlixCloud, hanime.tv) can break when sites change; parser failures are logged locally in `anime.log`.
+- Provider scrapers (AniWorld/VOE/Vidmoly, Re:ANIME/FlixCloud, hanime.tv, AllAnime/mkissa) can break when sites change; parser failures are logged locally in `anime.log`.
 - hanime.tv search returns the whole catalog (~4 MB) once per 10 min per session and matches AniList hentai titles by series name; weakly related titles may not map. Only engages when the AniList entry is flagged adult.
+- AllAnime rotates its client crypto (build id + AES mask + header templates). Baked-in constants are latest-at-integration; when the site rotates, playback fails until the remote config (`AllAnimeProvider.Cfg.REMOTE_CONFIG_URL`) is updated — set `ALLANIME_CONFIG_URL` to point elsewhere. Known hosters for the current API are Ok.ru embeds (HLS master) and legacy `--` clock.json refs; other hosts (mp4upload/filemoon/vidnest) are deliberately not extracted yet.
 - Absolute episode mapping skips unnumbered specials, so rare special-numbering cases can still be off.
 - Current play cache is intentionally permanent; refresh happens in the background.
 - The old 8080 dev server and website were removed from the repo.
