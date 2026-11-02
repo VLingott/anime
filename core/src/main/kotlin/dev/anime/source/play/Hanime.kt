@@ -39,6 +39,7 @@ import javax.crypto.spec.SecretKeySpec
 class HanimeProvider : PlaybackProvider {
     override val id = "hanime"
     override val name = "hanime.tv"
+    override val adultOnly = true
 
     override suspend fun resolve(
         detail: DetailResult,

@@ -76,14 +76,24 @@ class PlaybackService(
     /** Provider ids turned off in Settings; skipped during resolve and probes. */
     @Volatile private var disabledProviders: Set<String> = emptySet()
 
+    /** When false, adult-only providers are neither exposed nor used. */
+    @Volatile private var adultContentAllowed = false
+
     fun setDisabledProviders(ids: Set<String>) {
         disabledProviders = ids
     }
 
-    fun availableProviders(): List<Pair<String, String>> = providers.map { it.id to it.name }
+    fun setAdultContentAllowed(allowed: Boolean) {
+        adultContentAllowed = allowed
+    }
+
+    data class ProviderOption(val id: String, val name: String, val adultOnly: Boolean)
+
+    fun availableProviders(): List<ProviderOption> =
+        providers.map { ProviderOption(it.id, it.name, it.adultOnly) }
 
     internal fun activeProviders(): List<PlaybackProvider> =
-        providers.filter { it.id !in disabledProviders }
+        providers.filter { it.id !in disabledProviders && (adultContentAllowed || !it.adultOnly) }
 
     suspend fun play(
         id: String,

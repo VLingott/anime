@@ -495,6 +495,7 @@ fun App(deps: Deps) {
 
     LaunchedEffect(Unit) {
         deps.core.playback.setDisabledProviders(disabledProviders)
+        deps.core.playback.setAdultContentAllowed(!hideAdult)
     }
 
     if (updateState != null) {
@@ -567,6 +568,15 @@ fun App(deps: Deps) {
                     onSetHideAdult = { value ->
                         hideAdult = value
                         deps.progress.saveHideAdultContent(value)
+                        deps.core.playback.setAdultContentAllowed(!value)
+                        if (value) {
+                            filters = filters.copy(
+                                genres = filters.genres - AniListSource.ADULT_GENRE,
+                                tags = filters.tags.filterNot { it.equals(AniListSource.ADULT_GENRE, true) }.toSet(),
+                                excludedTags = filters.excludedTags
+                                    .filterNot { it.equals(AniListSource.ADULT_GENRE, true) }.toSet(),
+                            )
+                        }
                     },
                     disabledProviders = disabledProviders,
                     onToggleProvider = { id ->
@@ -845,9 +855,14 @@ private fun HomeScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        deps.core.playback.availableProviders().forEach { (id, name) ->
-                            Chip(name, selected = id !in disabledProviders) { onToggleProvider(id) }
-                        }
+                        deps.core.playback.availableProviders()
+                            .filter { !it.adultOnly || !hideAdult }
+                            .forEach { provider ->
+                                Chip(
+                                    provider.name,
+                                    selected = provider.id !in disabledProviders,
+                                ) { onToggleProvider(provider.id) }
+                            }
                     }
                     Text(
                         "Disabled providers are skipped when resolving streams.",
@@ -1133,6 +1148,7 @@ private fun SearchScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var tagCatalog by remember { mutableStateOf<List<AniListTag>>(emptyList()) }
     var tagLoading by remember { mutableStateOf(false) }
+    var genreCatalog by remember { mutableStateOf(AniListSource.GENRES) }
     val listState = rememberLazyListState()
 
     LaunchedEffect(filters.showFilters) {
@@ -1143,6 +1159,13 @@ private fun SearchScreen(
             runCatching { deps.core.aniList.allTags(deps.core.ctx) }.getOrDefault(emptyList())
         }
         tagLoading = false
+    }
+
+    LaunchedEffect(Unit) {
+        val live = withContext(Dispatchers.IO) {
+            runCatching { deps.core.aniList.allGenres(deps.core.ctx) }.getOrDefault(AniListSource.GENRES)
+        }
+        if (live.isNotEmpty()) genreCatalog = live
     }
 
     val fallbackTags = remember(hits, filters.tags, filters.excludedTags) {
@@ -1252,6 +1275,7 @@ private fun SearchScreen(
         if (filters.showFilters) {
             FiltersOverlay(
                 filters = filters,
+                genres = genreCatalog,
                 tagCatalog = tagCatalog,
                 fallbackTags = fallbackTags,
                 includeAdult = includeAdult,
@@ -1443,6 +1467,7 @@ private fun SortIconButton(filters: SearchFilters, onFilters: (SearchFilters) ->
 @Composable
 private fun FiltersOverlay(
     filters: SearchFilters,
+    genres: List<String>,
     tagCatalog: List<AniListTag>,
     fallbackTags: List<String>,
     includeAdult: Boolean,
@@ -1485,6 +1510,8 @@ private fun FiltersOverlay(
                 }
                 FilterPanel(
                     filters = filters,
+                    genres = if (includeAdult) genres
+                    else genres.filterNot { it.equals(AniListSource.ADULT_GENRE, true) },
                     tagOptions = tagOptions,
                     tagQuery = tagQuery,
                     onTagQuery = { tagQuery = it },
@@ -1504,6 +1531,7 @@ private fun FiltersOverlay(
 @Composable
 private fun FilterPanel(
     filters: SearchFilters,
+    genres: List<String>,
     tagOptions: List<String>,
     tagQuery: String,
     onTagQuery: (String) -> Unit,
@@ -1514,7 +1542,7 @@ private fun FilterPanel(
     Column(modifier.fillMaxWidth()) {
         Label("GENRES")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            AniListSource.GENRES.forEach { genre ->
+            genres.forEach { genre ->
                 Chip(
                     genre,
                     selected = genre in filters.genres,
@@ -2618,6 +2646,7 @@ private fun PlayerOverlay(
     var index by remember(args) { mutableStateOf(0) }
     var status by remember(args) { mutableStateOf("") }
     var failed by remember(args) { mutableStateOf(false) }
+    var resolving by remember(args) { mutableStateOf(true) }
     var resumeFrom by remember(args) { mutableStateOf(deps.progress.resumeMs(args.id, args.season, args.episode)) }
     var session by remember(args) { mutableStateOf<PlayerSession?>(null) }
     var controlsVisible by remember(args) { mutableStateOf(true) }
@@ -2714,6 +2743,7 @@ private fun PlayerOverlay(
     }
 
     LaunchedEffect(args, resolveAttempt) {
+        resolving = true
         deps.recents?.record(
             RecentSeries(
                 id = args.id,
@@ -2752,6 +2782,7 @@ private fun PlayerOverlay(
         }
         index = preferredIndex.coerceAtLeast(0)
         failed = sources.isEmpty()
+        resolving = false
         status = if (sources.isEmpty()) (resp?.error ?: "No playable source.") else ""
 
         if (sources.isNotEmpty()) {
@@ -2882,7 +2913,7 @@ private fun PlayerOverlay(
             },
     ) {
         val source = sources.getOrNull(index)
-        if (failed || source == null) {
+        if (failed) {
             Column(
                 Modifier.align(Alignment.Center).padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -2909,11 +2940,23 @@ private fun PlayerOverlay(
                         .clickable {
                             playerError = null
                             failed = false
+                            resolving = true
                             refreshedOnce = false
                             status = ""
                             resolveAttempt += 1
                         }
                         .padding(horizontal = 18.dp, vertical = 9.dp),
+                )
+            }
+        } else if (source == null) {
+            Column(
+                Modifier.align(Alignment.Center).padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    if (resolving) "Finding a source…" else "Starting stream…",
+                    color = Color(0xFF9B9B96),
+                    fontSize = 13.sp,
                 )
             }
         } else {
@@ -3100,18 +3143,30 @@ private fun PlayerOverlay(
                 val upNext = upNextSeconds
                 if (upcoming != null && upNext != null && !inPictureInPicture) {
                     Row(
-                        Modifier.align(Alignment.Center)
+                        Modifier.align(Alignment.BottomEnd)
+                            .padding(end = 16.dp, bottom = 88.dp)
+                            .widthIn(max = 400.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .background(Color(0xE60C0C0C))
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .border(1.dp, Color(0xFF232323), RoundedCornerShape(16.dp))
+                            .padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Column(Modifier.widthIn(max = 360.dp)) {
+                        Box(
+                            Modifier.width(112.dp).aspectRatio(16f / 9f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFF151515)),
+                        ) {
+                            deps.images.Image(nextEntry?.thumb, Modifier.fillMaxSize(), ContentScale.Crop)
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f, fill = false)) {
                             Text(
                                 "UP NEXT · ${upNext}s",
                                 color = Color(0xFF9B9B96),
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.SemiBold,
+                                letterSpacing = 0.8.sp,
                             )
                             Text(
                                 upcoming.episodeTitle ?: "Episode ${upcoming.episode}",
@@ -3125,38 +3180,38 @@ private fun PlayerOverlay(
                                 "S${upcoming.season} E${upcoming.episode}",
                                 color = Color(0xFF9B9B96),
                                 fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 2.dp),
+                                modifier = Modifier.padding(top = 1.dp),
                             )
+                            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    "Play now",
+                                    color = Color(0xFF0C0C0C),
+                                    fontSize = 12.sp,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(Color(0xFFF5F5F2))
+                                        .clickable {
+                                            upNextDismissed = true
+                                            upNextSeconds = null
+                                            onPlayNext(upcoming)
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                )
+                                Text(
+                                    "Cancel",
+                                    color = Color(0xFFC9C9C3),
+                                    fontSize = 12.sp,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(Color(0xFF151515))
+                                        .clickable {
+                                            upNextDismissed = true
+                                            upNextSeconds = null
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                )
+                            }
                         }
-                        Spacer(Modifier.width(16.dp))
-                        Text(
-                            "Play now",
-                            color = Color(0xFF0C0C0C),
-                            fontSize = 12.sp,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(Color(0xFFF5F5F2))
-                                .clickable {
-                                    upNextDismissed = true
-                                    upNextSeconds = null
-                                    onPlayNext(upcoming)
-                                }
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "Cancel",
-                            color = Color(0xFFC9C9C3),
-                            fontSize = 12.sp,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(Color(0xFF151515))
-                                .clickable {
-                                    upNextDismissed = true
-                                    upNextSeconds = null
-                                }
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
-                        )
                     }
                 }
             }

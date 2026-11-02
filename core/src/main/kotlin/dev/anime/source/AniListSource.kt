@@ -49,9 +49,12 @@ data class AniListFilter(
 class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
     private val disk = cacheDir?.let { DiskCache(File(it, "search"), 32L * 1024 * 1024) }
     private val tagDisk = cacheDir?.let { DiskCache(File(it, "tags-v2"), 2L * 1024 * 1024) }
+    private val genreDisk = cacheDir?.let { DiskCache(File(it, "genres-v1"), 256L * 1024) }
     private val cacheJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
     private val tagLock = Mutex()
     @Volatile private var tagCache: List<AniListTag>? = null
+    private val genreLock = Mutex()
+    @Volatile private var genreCache: List<String>? = null
 
     private val searchCache = ByteLruCache<String, List<SearchHit>>(32L * 1024 * 1024) { hits ->
         var bytes = 256L
@@ -189,12 +192,19 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
                     .take(8),
             )
         }
+        val visible = filterAdultHits(hits, filter.includeAdult)
         if (cacheKey != null) {
-            searchCache.put(cacheKey, hits)
-            disk?.write(cacheKey, cacheJson.encodeToString(hits))
+            searchCache.put(cacheKey, visible)
+            disk?.write(cacheKey, cacheJson.encodeToString(visible))
         }
-        return hits
+        return visible
     }
+
+    /** Drop explicit entries even when the API flags disagree, unless adult is allowed. */
+    internal fun filterAdultHits(hits: List<SearchHit>, includeAdult: Boolean): List<SearchHit> =
+        if (includeAdult) hits else hits.filter { hit ->
+            hit.genres.none { it.equals("Hentai", ignoreCase = true) }
+        }
 
     suspend fun allTags(ctx: SourceContext): List<AniListTag> = tagLock.withLock {
         tagCache?.let { return@withLock it }
@@ -261,12 +271,45 @@ class AniListSource(cacheDir: java.io.File? = null) : SourceAdapter {
 
     override suspend fun probe(ctx: SourceContext): Boolean = search(AniListFilter(search = "frieren"), ctx).isNotEmpty()
 
+    /** Live genre catalog; falls back to [GENRES] when the query fails. */
+    suspend fun allGenres(ctx: SourceContext, refresh: Boolean = false): List<String> = genreLock.withLock {
+        if (!refresh) {
+            genreCache?.let { return@withLock it }
+            genreDisk?.read("genres")?.let { text ->
+                runCatching { cacheJson.decodeFromString<List<String>>(text) }
+                    .getOrNull()?.takeIf { it.isNotEmpty() }?.let {
+                        genreCache = it
+                        return@withLock it
+                    }
+            }
+        }
+        val live = runCatching {
+            val text = ctx.http.post("https://graphql.anilist.co") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"query":"query { GenreCollection }"}""")
+            }.bodyAsText()
+            Json.parseToJsonElement(text).jsonObject["data"]?.jsonObject
+                ?.get("GenreCollection")?.jsonArray
+                ?.mapNotNull { it.jsonPrimitive.contentOrNullSafe() }
+                ?.takeIf { it.isNotEmpty() }
+        }.onFailure { AppLog.w("anilist", "Genre collection fetch failed", it) }
+            .getOrNull()
+
+        val genres = live ?: GENRES
+        genreCache = genres
+        runCatching { genreDisk?.write("genres", cacheJson.encodeToString(genres)) }
+            .onFailure { AppLog.w("anilist", "Could not persist genre collection", it) }
+        genres
+    }
+
     companion object {
+        /** AniList's genre taxonomy; the live list is fetched (GenreCollection) with this fallback. */
         val GENRES = listOf(
-            "Action", "Adventure", "Comedy", "Drama", "Ecchi", "Fantasy", "Horror", "Mahou Shoujo",
+            "Action", "Adventure", "Comedy", "Drama", "Ecchi", "Fantasy", "Horror", "Hentai", "Mahou Shoujo",
             "Mecha", "Music", "Mystery", "Psychological", "Romance", "Sci-Fi", "Slice of Life",
             "Sports", "Supernatural", "Thriller",
         )
+        const val ADULT_GENRE = "Hentai"
         val FORMATS = listOf("TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC")
         val STATUSES = listOf("RELEASING", "FINISHED", "NOT_YET_RELEASED", "CANCELLED", "HIATUS")
         val SEASONS = listOf("WINTER", "SPRING", "SUMMER", "FALL")

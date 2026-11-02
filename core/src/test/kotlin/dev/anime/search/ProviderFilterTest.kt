@@ -12,6 +12,7 @@ class ProviderFilterTest {
     private class FakeProvider(
         override val id: String,
         override val name: String,
+        override val adultOnly: Boolean = false,
     ) : PlaybackProvider {
         override suspend fun resolve(
             detail: DetailResult,
@@ -31,11 +32,15 @@ class ProviderFilterTest {
 
     @Test
     fun `disabled providers are skipped and exposed for settings`() {
-        val provider = FakeProvider("alpha", "Alpha")
-        val other = FakeProvider("beta", "Beta")
-        val service = service(provider, other)
+        val service = service(FakeProvider("alpha", "Alpha"), FakeProvider("beta", "Beta"))
 
-        assertEquals(listOf("alpha" to "Alpha", "beta" to "Beta"), service.availableProviders())
+        assertEquals(
+            listOf(
+                PlaybackService.ProviderOption("alpha", "Alpha", false),
+                PlaybackService.ProviderOption("beta", "Beta", false),
+            ),
+            service.availableProviders(),
+        )
         assertEquals(listOf("alpha", "beta"), service.activeProviders().map { it.id })
 
         service.setDisabledProviders(setOf("alpha"))
@@ -43,6 +48,20 @@ class ProviderFilterTest {
 
         service.setDisabledProviders(emptySet())
         assertEquals(2, service.activeProviders().size)
+    }
+
+    @Test
+    fun `adult-only providers are hidden and skipped unless adult content is allowed`() {
+        val service = service(FakeProvider("alpha", "Alpha"), FakeProvider("hanime", "hanime.tv", adultOnly = true))
+
+        assertEquals(1, service.activeProviders().size)
+        assertEquals("alpha", service.activeProviders().first().id)
+
+        service.setAdultContentAllowed(true)
+        assertEquals(listOf("alpha", "hanime"), service.activeProviders().map { it.id })
+
+        service.setAdultContentAllowed(false)
+        assertTrue(service.activeProviders().none { it.adultOnly })
     }
 
     @Test

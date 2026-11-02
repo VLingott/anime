@@ -86,6 +86,7 @@ import java.net.URL
 
 class MainActivity : ComponentActivity() {
     private val playerHost by lazy { AndroidPlayerHost(this) }
+    private val updateChecker by lazy { AndroidUpdateChecker(this, BuildConfig.VERSION_NAME) }
 
     internal fun playerHostForDeps(): AndroidPlayerHost = playerHost
 
@@ -106,6 +107,13 @@ class MainActivity : ComponentActivity() {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         playerHost.setPictureInPicture(isInPictureInPictureMode)
         if (!isInPictureInPictureMode && playerHost.isActive) playerHost.applyImmersive()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (isFinishing || isDestroyed) return
+        runCatching { updateChecker.checkForUpdates() }
+            .onFailure { AppLog.w("update", "Resume update check failed", it) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -130,11 +138,11 @@ class MainActivity : ComponentActivity() {
                 kotlinx.coroutines.delay(15 * 60_000L)
             }
         }
-        setContent { App(androidDeps(this)) }
+        setContent { App(androidDeps(this, updateChecker)) }
     }
 }
 
-private fun androidDeps(activity: MainActivity): Deps = Deps(
+private fun androidDeps(activity: MainActivity, updateChecker: AndroidUpdateChecker): Deps = Deps(
     core = CoreHandles(
         ctx = AppCore.ctx,
         aniList = AppCore.aniList,
@@ -153,7 +161,7 @@ private fun androidDeps(activity: MainActivity): Deps = Deps(
     back = AndroidBackHost,
     recents = FileRecentsStore(java.io.File(activity.filesDir, "recents.json")),
     appVersion = BuildConfig.VERSION_NAME,
-    updateChecker = AndroidUpdateChecker(activity, BuildConfig.VERSION_NAME),
+    updateChecker = updateChecker,
     clearCache = {
         CacheManager.clear(java.io.File(activity.filesDir, "anime-cache"))
     },

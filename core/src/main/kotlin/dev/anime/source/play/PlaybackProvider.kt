@@ -8,6 +8,8 @@ interface PlaybackProvider {
     val id: String
     val name: String
     val priority: Int get() = 0
+    /** Provider only serves adult titles; hidden and skipped while adult content is off. */
+    val adultOnly: Boolean get() = false
     suspend fun resolve(
         detail: DetailResult,
         season: Int,

@@ -476,6 +476,7 @@ fun main() {
             kotlinx.coroutines.delay(15 * 60_000L)
         }
     }
+    val updateChecker = DesktopUpdateChecker(appVersion)
     application {
         val windowState = rememberWindowState(width = 1280.dp, height = 860.dp)
         Window(
@@ -483,6 +484,16 @@ fun main() {
             title = "Anime",
             state = windowState,
         ) {
+            DisposableEffect(window) {
+                val listener = object : java.awt.event.WindowAdapter() {
+                    override fun windowGainedFocus(e: java.awt.event.WindowEvent?) {
+                        runCatching { updateChecker.checkForUpdates() }
+                            .onFailure { AppLog.w("update", "Focus update check failed", it) }
+                    }
+                }
+                window.addWindowFocusListener(listener)
+                onDispose { window.removeWindowFocusListener(listener) }
+            }
             App(
                 Deps(
                     core = CoreHandles(Core.ctx, Core.aniList, Core.tvmaze, Core.details, Core.playback, Core.cacheDir),
@@ -493,7 +504,7 @@ fun main() {
                     images = DesktopImages,
                     progress = DesktopProgress,
                     appVersion = appVersion,
-                    updateChecker = DesktopUpdateChecker(appVersion),
+                    updateChecker = updateChecker,
                     clearCache = { CacheManager.clear(Core.cacheDir) },
                     cacheBytes = { CacheManager.size(Core.cacheDir) },
                     openUrl = { url ->

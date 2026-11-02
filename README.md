@@ -7,15 +7,15 @@ Native anime app with one shared Kotlin/Compose UI for Android and Linux desktop
 - Persistent caches: search page 1, series views, play sources, HLS segments, images
 - Unified language + resolution menus with automatic stream switching
 - Home screen with continue-watching
-- In-app update check with download/install screen (Android) and auto-download/restart (Linux)
+- In-app update check with download/install screen (Android) and auto-download/restart (Linux), re-checked when the app regains focus
 - Android picture-in-picture
 - In-app update screens with automatic download (Android install prompt, Linux restart)
 - Recents sorting, new-episode markers (refreshed for airing shows) and fully-watched ordering
 - Episode lists use the aired count for ongoing shows (AniList `nextAiringEpisode`), not the planned total
-- Autoplay next episode with a cancellable “up next” countdown
+- Autoplay next episode with a cancellable “up next” card (thumbnail + title, bottom-right)
 - Subtitle track menu and subtitle size presets
 - Per-provider toggles in Settings
-- Adult-content filter (hidden by default) for search results and tag catalog; adult playback runs via hanime.tv (hanime.tv/host fetches need a `Referer: https://hanime.tv/`, which the HLS proxy sends; some networks block hanime DNS)
+- Adult-content filter (hidden by default) for search results, genre/tag catalogs; hanime.tv is hidden and disabled entirely while it is on (hanime host fetches need a `Referer: https://hanime.tv/`, which the HLS proxy sends; some networks block hanime DNS)
 
 ## Build
 
