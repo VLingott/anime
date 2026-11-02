@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.shape.CircleShape
@@ -118,6 +119,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.unit.sp
 import dev.anime.model.DetailResult
 import dev.anime.model.PlaySource
+import dev.anime.model.SubtitleTrack
 import dev.anime.model.SearchHit
 import dev.anime.model.StreamResolution
 import dev.anime.search.Details
@@ -220,6 +222,7 @@ interface PlayerHost {
     @Composable
     fun Video(
         url: String,
+        subtitles: List<SubtitleTrack> = emptyList(),
         resumeMs: Long,
         onProgress: (positionMs: Long, durationMs: Long) -> Unit,
         onError: (reason: String?) -> Unit,
@@ -2991,6 +2994,7 @@ private fun PlayerOverlay(
             ) {
                 deps.player.Video(
                     url = source.url,
+                    subtitles = source.subtitles,
                     resumeMs = resumeFrom,
                     onProgress = { pos, dur ->
                         deps.progress.save(args.id, args.season, args.episode, pos, dur)
@@ -3142,29 +3146,59 @@ private fun PlayerOverlay(
                 val upcoming = nextArgs
                 val upNext = upNextSeconds
                 if (upcoming != null && upNext != null && !inPictureInPicture) {
-                    Row(
+                    var dragOffset by remember(args) { mutableStateOf(Offset.Zero) }
+                    Box(
                         Modifier.align(Alignment.BottomEnd)
                             .padding(end = 16.dp, bottom = 88.dp)
-                            .widthIn(max = 400.dp)
+                            .width(240.dp)
+                            .aspectRatio(16f / 10f)
+                            .graphicsLayer {
+                                translationX = dragOffset.x
+                                translationY = dragOffset.y
+                                alpha = 1f - (dragOffset.getDistance() / 600f).coerceIn(0f, 0.5f)
+                            }
                             .clip(RoundedCornerShape(16.dp))
-                            .background(Color(0xE60C0C0C))
-                            .border(1.dp, Color(0xFF232323), RoundedCornerShape(16.dp))
-                            .padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            .background(Color(0xFF151515))
+                            .pointerInput(upcoming) {
+                                detectDragGestures(
+                                    onDrag = { change, amount ->
+                                        change.consume()
+                                        dragOffset += amount
+                                    },
+                                    onDragEnd = {
+                                        if (kotlin.math.abs(dragOffset.x) > size.width * 0.3f ||
+                                            dragOffset.y > size.height * 0.3f
+                                        ) {
+                                            upNextDismissed = true
+                                            upNextSeconds = null
+                                        }
+                                        dragOffset = Offset.Zero
+                                    },
+                                    onDragCancel = { dragOffset = Offset.Zero },
+                                )
+                            }
+                            .clickable {
+                                upNextDismissed = true
+                                upNextSeconds = null
+                                onPlayNext(upcoming)
+                            },
                     ) {
+                        deps.images.Image(nextEntry?.thumb, Modifier.matchParentSize(), ContentScale.Crop)
                         Box(
-                            Modifier.width(112.dp).aspectRatio(16f / 9f)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFF151515)),
+                            Modifier.matchParentSize().background(
+                                Brush.verticalGradient(
+                                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.88f)),
+                                ),
+                            ),
+                        )
+                        Column(
+                            Modifier.align(Alignment.BottomStart).fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
                         ) {
-                            deps.images.Image(nextEntry?.thumb, Modifier.fillMaxSize(), ContentScale.Crop)
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f, fill = false)) {
                             Text(
                                 "UP NEXT · ${upNext}s",
-                                color = Color(0xFF9B9B96),
-                                fontSize = 10.sp,
+                                color = Color(0xFFD9D9D3),
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 letterSpacing = 0.8.sp,
                             )
@@ -3172,45 +3206,19 @@ private fun PlayerOverlay(
                                 upcoming.episodeTitle ?: "Episode ${upcoming.episode}",
                                 color = Color(0xFFF5F5F2),
                                 fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(top = 2.dp),
-                            )
-                            Text(
-                                "S${upcoming.season} E${upcoming.episode}",
-                                color = Color(0xFF9B9B96),
-                                fontSize = 11.sp,
                                 modifier = Modifier.padding(top = 1.dp),
                             )
-                            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    "Play now",
-                                    color = Color(0xFF0C0C0C),
-                                    fontSize = 12.sp,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(999.dp))
-                                        .background(Color(0xFFF5F5F2))
-                                        .clickable {
-                                            upNextDismissed = true
-                                            upNextSeconds = null
-                                            onPlayNext(upcoming)
-                                        }
-                                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                                )
-                                Text(
-                                    "Cancel",
-                                    color = Color(0xFFC9C9C3),
-                                    fontSize = 12.sp,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(999.dp))
-                                        .background(Color(0xFF151515))
-                                        .clickable {
-                                            upNextDismissed = true
-                                            upNextSeconds = null
-                                        }
-                                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                                )
-                            }
+                            Text(
+                                "S${upcoming.season} E${upcoming.episode} · tap to play · swipe away",
+                                color = Color(0xFFB5B5AE),
+                                fontSize = 9.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Clip,
+                                modifier = Modifier.padding(top = 1.dp),
+                            )
                         }
                     }
                 }

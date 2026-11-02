@@ -554,6 +554,15 @@ class AllAnimeProvider(cacheDir: java.io.File? = null) : PlaybackProvider {
         val link: String? = null,
         @SerialName("resolutionStr") val resolutionStr: String? = null,
         val hls: Boolean? = null,
+        val subtitles: List<ClockSubtitle> = emptyList(),
+    )
+
+    @Serializable
+    data class ClockSubtitle(
+        val src: String? = null,
+        val url: String? = null,
+        val lang: String? = null,
+        val label: String? = null,
     )
 
     @Serializable

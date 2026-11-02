@@ -55,6 +55,9 @@ object AppCore {
         )
     }
 
+    /** Wrap an upstream URL for the in-process data source (subtitles, side files). */
+    fun proxied(url: String): String = BASE + "u=" + URLEncoder.encode(url, Charsets.UTF_8)
+
     data class Target(val url: String? = null, val link: String? = null)
 
     fun target(uri: String): Target? {

@@ -43,7 +43,10 @@ import androidx.media3.common.TrackGroup
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.common.MimeTypes
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
@@ -53,6 +56,7 @@ import androidx.core.content.FileProvider
 import dev.anime.ui.App
 import dev.anime.ui.BackHost
 import dev.anime.ui.CoreHandles
+import dev.anime.model.SubtitleTrack
 import dev.anime.ui.Deps
 import dev.anime.ui.ImageHost
 import dev.anime.cache.CacheManager
@@ -232,6 +236,7 @@ internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
     @Composable
     override fun Video(
         url: String,
+        subtitles: List<SubtitleTrack>,
         resumeMs: Long,
         onProgress: (Long, Long) -> Unit,
         onError: (String?) -> Unit,
@@ -307,9 +312,27 @@ internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
             }
         }
 
-        LaunchedEffect(url) {
+        LaunchedEffect(url, subtitles) {
             val previous = if (player.mediaItemCount > 0) player.currentPosition else resumeMs
-            val media = HlsMediaSource.Factory(HlsDataSourceFactory(AppCore.hls)).createMediaSource(MediaItem.fromUri(url))
+            val primary = HlsMediaSource.Factory(HlsDataSourceFactory(AppCore.hls))
+                .createMediaSource(MediaItem.fromUri(url))
+            val media = if (subtitles.isEmpty()) {
+                primary
+            } else {
+                val subSources = subtitles.mapIndexed { index, track ->
+                    val configuration = MediaItem.SubtitleConfiguration.Builder(Uri.parse(AppCore.proxied(track.url)))
+                        .setMimeType(subtitleMimeType(track.url))
+                        .apply {
+                            track.label?.let { setLabel(it) }
+                            track.language?.let { setLanguage(it) }
+                            if (track.default || index == 0) setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                        }
+                        .build()
+                    SingleSampleMediaSource.Factory(HlsDataSourceFactory(AppCore.hls))
+                        .createMediaSource(configuration, C.TIME_UNSET)
+                }
+                MergingMediaSource(primary, *subSources.toTypedArray())
+            }
             player.setMediaSource(media)
             player.prepare()
             if (previous > 0) player.seekTo(previous)
@@ -381,6 +404,8 @@ private class AndroidSession(private val player: ExoPlayer) : PlayerSession {
     private data class Override(val group: TrackGroup, val index: Int)
     private var overrides: Map<String, Override> = emptyMap()
     private var subtitleOverrides: Map<String, Override> = emptyMap()
+    private var subtitlesUserDisabled = false
+    private var subtitlesAutoSelected = false
 
     fun refresh() {
         playing = player.isPlaying
@@ -419,11 +444,18 @@ private class AndroidSession(private val player: ExoPlayer) : PlayerSession {
         subtitleOverrides = map
         if (tracks != subtitleTracks) subtitleTracks = tracks
         activeSubtitleId = active
+
+        // Show the first available track by default; respect an explicit "Off".
+        if (active == null && tracks.isNotEmpty() && !subtitlesUserDisabled && !subtitlesAutoSelected) {
+            subtitlesAutoSelected = true
+            selectSubtitle(tracks.first().id)
+        }
     }
 
     override fun selectSubtitle(id: String) {
         val parameters = player.trackSelectionParameters.buildUpon()
         if (id == "off") {
+            subtitlesUserDisabled = true
             parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).clearOverridesOfType(C.TRACK_TYPE_TEXT)
             player.trackSelectionParameters = parameters.build()
             activeSubtitleId = null
@@ -431,6 +463,7 @@ private class AndroidSession(private val player: ExoPlayer) : PlayerSession {
             return
         }
         val target = subtitleOverrides[id] ?: return
+        subtitlesUserDisabled = false
         parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
             .setOverrideForType(TrackSelectionOverride(target.group, target.index))
         player.trackSelectionParameters = parameters.build()
@@ -505,6 +538,15 @@ private class AndroidSession(private val player: ExoPlayer) : PlayerSession {
             .build()
         activeAudioId = id
         audioTracks = audioTracks.map { it.copy(selected = it.id == id) }
+    }
+}
+
+private fun subtitleMimeType(url: String): String {
+    val path = url.substringBefore('?').substringBefore('#')
+    return when {
+        path.endsWith(".srt", ignoreCase = true) -> MimeTypes.APPLICATION_SUBRIP
+        path.endsWith(".ssa", ignoreCase = true) || path.endsWith(".ass", ignoreCase = true) -> MimeTypes.TEXT_SSA
+        else -> MimeTypes.TEXT_VTT
     }
 }
 

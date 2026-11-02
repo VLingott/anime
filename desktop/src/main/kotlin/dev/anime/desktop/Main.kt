@@ -36,6 +36,7 @@ import dev.anime.source.TvmazeEpisodesSource
 import dev.anime.source.buildHttpClient
 import dev.anime.ui.App
 import dev.anime.ui.CoreHandles
+import dev.anime.model.SubtitleTrack
 import dev.anime.ui.Deps
 import dev.anime.ui.ImageHost
 import dev.anime.ui.PlayerHost
@@ -216,6 +217,7 @@ private class DesktopPlayerHost(
     @Composable
     override fun Video(
         url: String,
+        subtitles: List<SubtitleTrack>,
         resumeMs: Long,
         onProgress: (Long, Long) -> Unit,
         onError: (String?) -> Unit,
@@ -242,6 +244,7 @@ private class DesktopPlayerHost(
             runCatching {
                 MpvEngine(
                     url = url,
+                    subtitles = subtitles,
                     startMs = resumeMs,
                     widgetWidth = w,
                     widgetHeight = h,

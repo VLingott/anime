@@ -3,6 +3,14 @@ package dev.anime.model
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class SubtitleTrack(
+    val url: String,
+    val label: String? = null,
+    val language: String? = null,
+    val default: Boolean = false,
+)
+
+@Serializable
 data class PlaySource(
     val id: String,
     val name: String,
@@ -11,6 +19,7 @@ data class PlaySource(
     val languages: List<String> = emptyList(),
     val episodeTitleGerman: String? = null,
     val episodeTitleEnglish: String? = null,
+    val subtitles: List<SubtitleTrack> = emptyList(),
 )
 
 @Serializable

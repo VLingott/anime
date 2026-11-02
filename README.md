@@ -13,7 +13,7 @@ Native anime app with one shared Kotlin/Compose UI for Android and Linux desktop
 - Recents sorting, new-episode markers (refreshed for airing shows) and fully-watched ordering
 - Episode lists use the aired count for ongoing shows (AniList `nextAiringEpisode`), not the planned total
 - Autoplay next episode with a cancellable “up next” card (thumbnail + title, bottom-right)
-- Subtitle track menu and subtitle size presets
+- Subtitle tracks from HLS manifests and external AllAnime subtitle files, auto-selected by default, with a track menu and size presets
 - Per-provider toggles in Settings
 - Adult-content filter (hidden by default) for search results, genre/tag catalogs; hanime.tv is hidden and disabled entirely while it is on (hanime host fetches need a `Referer: https://hanime.tv/`, which the HLS proxy sends; some networks block hanime DNS)
 

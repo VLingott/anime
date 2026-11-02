@@ -175,6 +175,21 @@ class AllAnimeTest {
         assertEquals(604_800_000L, cfg.epochBucketMs)
     }
 
+
+    @Test
+    fun `clock links expose subtitle tracks`() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val body = """{"links":[{"link":"https://a/x/play.m3u8","resolutionStr":"1080","subtitles":[
+            {"src":"https://subs/a.vtt","lang":"en","label":"English"},
+            {"url":"https://subs/b.srt","lang":"de"}
+        ]}]}"""
+        val link = json.decodeFromString<AllAnimeProvider.ClockResponse>(body).links.first()
+        assertEquals(2, link.subtitles.size)
+        assertEquals("https://subs/a.vtt", link.subtitles.first().src)
+        assertEquals("English", link.subtitles.first().label)
+        assertEquals("de", link.subtitles.last().lang)
+    }
+
     // ── Clock link model ────────────────────────────────────────────────
 
     @Test
