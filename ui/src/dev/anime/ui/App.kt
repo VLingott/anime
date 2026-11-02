@@ -626,6 +626,7 @@ private data class RecentEntry(
     val fullyWatched: Boolean,
 )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun HomeScreen(
     deps: Deps,
@@ -839,7 +840,11 @@ private fun HomeScreen(
                         modifier = Modifier.padding(top = 6.dp),
                     )
                     Label("PROVIDERS")
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FlowRow(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
                         deps.core.playback.availableProviders().forEach { (id, name) ->
                             Chip(name, selected = id !in disabledProviders) { onToggleProvider(id) }
                         }
