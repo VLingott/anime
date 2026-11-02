@@ -5,6 +5,7 @@ import dev.anime.model.PlayResponse
 import dev.anime.model.StreamResolution
 import dev.anime.source.SourceContext
 import dev.anime.source.play.AniWorldProvider
+import dev.anime.source.play.HanimeProvider
 import dev.anime.source.play.PlaybackProvider
 import dev.anime.source.play.ReAnimeProvider
 import dev.anime.util.AppLog
@@ -52,7 +53,8 @@ class PlaybackService(
     private val details: Details,
     private val urlTransform: (String) -> String = { it },
     cacheDir: File? = null,
-    private val providers: List<PlaybackProvider> = listOf(AniWorldProvider(cacheDir), ReAnimeProvider()),
+    private val providers: List<PlaybackProvider> =
+        listOf(AniWorldProvider(cacheDir), ReAnimeProvider(), HanimeProvider()),
     val health: ProviderHealth = ProviderHealth(),
 ) {
     private val hot = ConcurrentHashMap<String, CachedPlay>()

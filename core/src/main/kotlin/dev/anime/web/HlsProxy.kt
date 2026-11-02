@@ -96,13 +96,9 @@ class HlsProxy(
                 ctx.http.get(url) {
                     header(HttpHeaders.UserAgent, UA)
                     header(HttpHeaders.Accept, "*/*")
-                    if (url.contains("enc-dec.app")) {
-                        header(HttpHeaders.Origin, "https://enc-dec.app")
-                        header(HttpHeaders.Referrer, "https://enc-dec.app/")
-                    } else {
-                        header(HttpHeaders.Origin, FlixCloud.BASE)
-                        header(HttpHeaders.Referrer, FlixCloud.BASE + "/")
-                    }
+                    val (origin, referer) = headersFor(url)
+                    header(HttpHeaders.Origin, origin)
+                    header(HttpHeaders.Referrer, referer)
                 }.bodyAsText()
             } ?: return null
             if (!text.trimStart().startsWith("#EXTM3U")) return null
@@ -114,9 +110,24 @@ class HlsProxy(
         return Result.FileData(file, contentType)
     }
 
+    /** Origin/referer per upstream host; hanime rejects and times out other hosts. */
+    internal fun headersFor(url: String): Pair<String, String> = when {
+        isHanimeHost(url) -> "https://hanime.tv" to "https://hanime.tv/"
+        else -> FlixCloud.BASE to FlixCloud.BASE + "/"
+    }
+
+    private fun isHanimeHost(url: String): Boolean {
+        val host = runCatching { URI(url).host.orEmpty().lowercase() }.getOrDefault("")
+        return host == "hanime.tv" || host.endsWith(".hanime.tv") ||
+            host == "htv-tsukuyomi.com" || host.endsWith(".htv-tsukuyomi.com") ||
+            host == "htv-services.com" || host.endsWith(".htv-services.com") ||
+            host.endsWith("freeanimehentai.net")
+    }
+
     private fun isPlaylistPath(url: String): Boolean {
         val path = runCatching { URI(url).path.orEmpty() }.getOrDefault(url)
-        return path.endsWith(".m3u8") || path.endsWith("master.txt") || url.contains("parse-flixcloud")
+        return path.endsWith(".m3u8") || path.endsWith("master.txt") || url.contains("parse-flixcloud") ||
+            (path.startsWith("/hls/") && isHanimeHost(url))
     }
 
     private fun isKeyPath(url: String): Boolean {
@@ -193,8 +204,9 @@ class HlsProxy(
                 ctx.http.prepareGet(url) {
                     header(HttpHeaders.UserAgent, UA)
                     header(HttpHeaders.Accept, "*/*")
-                    header(HttpHeaders.Origin, FlixCloud.BASE)
-                    header(HttpHeaders.Referrer, FlixCloud.BASE + "/")
+                    val (origin, referer) = headersFor(url)
+                    header(HttpHeaders.Origin, origin)
+                    header(HttpHeaders.Referrer, referer)
                 }.execute { response ->
                     if (response.status.value !in 200..299) return@execute false
                     val channel = response.bodyAsChannel()

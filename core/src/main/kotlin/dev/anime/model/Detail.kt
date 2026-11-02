@@ -27,6 +27,7 @@ data class DetailCharacter(
 data class DetailResult(
     val id: Long,
     val title: DetailTitle? = null,
+    val adult: Boolean = false,
     val synonyms: List<String> = emptyList(),
     val description: String? = null,
     val coverImage: String? = null,

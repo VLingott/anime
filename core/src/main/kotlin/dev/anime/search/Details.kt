@@ -31,7 +31,7 @@ class Details(private val ctx: SourceContext) {
 
         val gql = """
             query (${'$'}id: Int) { Media(id: ${'$'}id, type: ANIME) {
-              id title { romaji english native } synonyms description(asHtml: false)
+              id isAdult title { romaji english native } synonyms description(asHtml: false)
               genres tags { name rank } format status season seasonYear episodes duration
               averageScore popularity source startDate { year month day } endDate { year month day }
               coverImage { extraLarge large color } bannerImage
@@ -55,6 +55,7 @@ class Details(private val ctx: SourceContext) {
 
             DetailResult(
                 id = id.toLong(),
+                adult = media["isAdult"]?.str() == "true",
                 title = DetailTitle(
                     romaji = t?.get("romaji")?.str(),
                     english = t?.get("english")?.str(),

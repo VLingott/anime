@@ -2,7 +2,7 @@
 
 Native anime app with one shared Kotlin/Compose UI for Android and Linux desktop.
 
-- Providers: AniWorld (German), Re:ANIME (Japanese/English)
+- Providers: AniWorld (German), Re:ANIME (Japanese/English), hanime.tv (adult only)
 - HLS playback: Media3 on Android, libmpv on desktop
 - Persistent caches: search page 1, series views, play sources, HLS segments, images
 - Unified language + resolution menus with automatic stream switching
@@ -11,7 +11,7 @@ Native anime app with one shared Kotlin/Compose UI for Android and Linux desktop
 - Android picture-in-picture
 - In-app update screens with automatic download (Android install prompt, Linux restart)
 - Recents sorting, new-episode markers and fully-watched ordering
-- Adult-content filter (hidden by default) for search results and tag catalog
+- Adult-content filter (hidden by default) for search results and tag catalog; adult playback runs via hanime.tv (hanime.tv/host fetches need a `Referer: https://hanime.tv/`, which the HLS proxy sends; some networks block hanime DNS)
 
 ## Build
 
