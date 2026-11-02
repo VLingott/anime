@@ -13,6 +13,7 @@ import dev.anime.ui.PlayerAudioTrack
 import dev.anime.util.AppLog
 import dev.anime.ui.PlayerResolution
 import dev.anime.ui.PlayerSession
+import dev.anime.ui.PlayerSubtitleTrack
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
@@ -109,6 +110,10 @@ internal class MpvEngine(
         private set
     override var activeAudioId by mutableStateOf<String?>(null)
         private set
+    override var subtitleTracks by mutableStateOf<List<PlayerSubtitleTrack>>(emptyList())
+        private set
+    override var activeSubtitleId by mutableStateOf<String?>(null)
+        private set
     override var resolutions by mutableStateOf<List<PlayerResolution>>(emptyList())
         private set
     override var activeResolutionId by mutableStateOf<String?>("auto")
@@ -124,7 +129,8 @@ internal class MpvEngine(
 
     @Volatile private var errorSent = false
     @Volatile private var closed = false
-    @Volatile private var ended = false
+    override var ended by mutableStateOf(false)
+        private set
     private val lock = Object()
     private var pendingFrame = false
     @Volatile private var pendingSeekMs = 0L
@@ -168,6 +174,7 @@ internal class MpvEngine(
         setOption("load-scripts", "no")
         setOption("audio-client-name", "Anime")
         setOption("sub-auto", "no")
+        setOption("sub-font-size", subtitleFontSize(Progress.subtitleSize()))
         setOption("audio-file-auto", "no")
         setOption("cache", "yes")
         setOption("cache-pause", "no")
@@ -389,6 +396,39 @@ internal class MpvEngine(
             audioTracks = list
         }
         activeAudioId = list.firstOrNull { it.selected }?.id
+
+        val subs = runCatching {
+            Json.parseToJsonElement(json).jsonArray.mapNotNull { element ->
+                val o = element.jsonObject
+                if (o["type"]?.jsonPrimitive?.contentOrNull != "sub") return@mapNotNull null
+                val id = o["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                val language = o["lang"]?.jsonPrimitive?.contentOrNull
+                val title = o["title"]?.jsonPrimitive?.contentOrNull
+                val codec = o["codec"]?.jsonPrimitive?.contentOrNull?.uppercase()
+                PlayerSubtitleTrack(
+                    id = id,
+                    label = languageName(language) ?: title ?: "Subtitle " + id,
+                    detail = codec,
+                    selected = o["selected"]?.jsonPrimitive?.booleanOrNull == true,
+                    forced = o["forced"]?.jsonPrimitive?.booleanOrNull == true,
+                )
+            }
+        }.getOrNull() ?: emptyList()
+        if (subs != subtitleTracks) subtitleTracks = subs
+        activeSubtitleId = subs.firstOrNull { it.selected }?.id
+    }
+
+    override fun selectSubtitle(id: String) {
+        if (closed) return
+        if (id == "off") {
+            lib.mpv_set_property_string(handle, "sid", "no")
+            activeSubtitleId = null
+            subtitleTracks = subtitleTracks.map { it.copy(selected = false) }
+        } else {
+            lib.mpv_set_property_string(handle, "sid", id)
+            activeSubtitleId = id
+            subtitleTracks = subtitleTracks.map { it.copy(selected = it.id == id) }
+        }
     }
 
     private fun loadResolutions() {
@@ -513,4 +553,10 @@ private fun languageName(code: String?): String? = when (code?.lowercase()) {
     "pol", "pl" -> "Polish"
     "ukr", "uk" -> "Ukrainian"
     else -> code.uppercase()
+}
+
+private fun subtitleFontSize(size: Int): String = when (size) {
+    0 -> "32"
+    2 -> "48"
+    else -> "40"
 }

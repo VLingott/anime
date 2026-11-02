@@ -65,6 +65,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -126,6 +127,7 @@ import dev.anime.store.RecentSeries
 import dev.anime.util.AppLog
 import dev.anime.util.absoluteEpisodeIndex
 import dev.anime.util.cycleFilter
+import dev.anime.util.nextEpisode
 import dev.anime.store.RecentsStore
 import dev.anime.source.AniListFilter
 import dev.anime.source.AniListSource
@@ -180,6 +182,14 @@ data class PlayerAudioTrack(
     val selected: Boolean = false,
 )
 
+data class PlayerSubtitleTrack(
+    val id: String,
+    val label: String,
+    val detail: String? = null,
+    val selected: Boolean = false,
+    val forced: Boolean = false,
+)
+
 interface PlayerSession {
     val playing: Boolean
     val buffering: Boolean
@@ -189,11 +199,16 @@ interface PlayerSession {
     val activeAudioId: String?
     val resolutions: List<PlayerResolution>
     val activeResolutionId: String?
+    val subtitleTracks: List<PlayerSubtitleTrack> get() = emptyList()
+    val activeSubtitleId: String? get() = null
+    /** true once playback reached the end of the media. */
+    val ended: Boolean get() = false
 
     fun playPause()
     fun seekTo(positionMs: Long)
     fun selectAudio(id: String)
     fun selectResolution(id: String) {}
+    fun selectSubtitle(id: String) {}
 }
 
 interface PlayerHost {
@@ -275,6 +290,12 @@ interface ProgressStore {
     fun saveDefaultAudioLanguage(value: String) {}
     fun hideAdultContent(): Boolean = true
     fun saveHideAdultContent(value: Boolean) {}
+    fun disabledProviders(): Set<String> = emptySet()
+    fun saveDisabledProviders(value: Set<String>) {}
+    fun autoplayNext(): Boolean = true
+    fun saveAutoplayNext(value: Boolean) {}
+    fun subtitleSize(): Int = 1
+    fun saveSubtitleSize(value: Int) {}
     fun removeSeries(id: Long) {}
 }
 
@@ -468,6 +489,13 @@ fun App(deps: Deps) {
     var searchMode by rememberSaveable { mutableStateOf(false) }
     var titleLanguage by remember { mutableStateOf(TitleLanguage.entries.getOrElse(deps.progress.titleLanguage()) { TitleLanguage.ROMAJI }) }
     var hideAdult by remember { mutableStateOf(deps.progress.hideAdultContent()) }
+    var disabledProviders by remember { mutableStateOf(deps.progress.disabledProviders()) }
+    var autoplayNext by remember { mutableStateOf(deps.progress.autoplayNext()) }
+    var subtitleSize by remember { mutableStateOf(deps.progress.subtitleSize()) }
+
+    LaunchedEffect(Unit) {
+        deps.core.playback.setDisabledProviders(disabledProviders)
+    }
 
     if (updateState != null) {
         UpdateDialog(
@@ -482,7 +510,14 @@ fun App(deps: Deps) {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             val currentPlayer = player
             if (currentPlayer != null) {
-                PlayerOverlay(deps, currentPlayer, titleLanguage, onClose = { player = null; refreshTick++ })
+                PlayerOverlay(
+                    deps = deps,
+                    args = currentPlayer,
+                    titleLanguage = titleLanguage,
+                    autoplayNext = autoplayNext,
+                    onClose = { player = null; refreshTick++ },
+                    onPlayNext = { next -> player = next },
+                )
             } else if (selected != null) {
                 DetailScreen(
                     deps = deps,
@@ -533,6 +568,23 @@ fun App(deps: Deps) {
                         hideAdult = value
                         deps.progress.saveHideAdultContent(value)
                     },
+                    disabledProviders = disabledProviders,
+                    onToggleProvider = { id ->
+                        val next = if (id in disabledProviders) disabledProviders - id else disabledProviders + id
+                        disabledProviders = next
+                        deps.progress.saveDisabledProviders(next)
+                        deps.core.playback.setDisabledProviders(next)
+                    },
+                    autoplayNext = autoplayNext,
+                    onSetAutoplayNext = { value ->
+                        autoplayNext = value
+                        deps.progress.saveAutoplayNext(value)
+                    },
+                    subtitleSize = subtitleSize,
+                    onSetSubtitleSize = { value ->
+                        subtitleSize = value
+                        deps.progress.saveSubtitleSize(value)
+                    },
                     onSearch = { searchMode = true },
                     onResume = { recent ->
                         val displayTitle = recentTitle(
@@ -582,6 +634,12 @@ private fun HomeScreen(
     onSetTitleLanguage: (TitleLanguage) -> Unit,
     hideAdult: Boolean,
     onSetHideAdult: (Boolean) -> Unit,
+    disabledProviders: Set<String>,
+    onToggleProvider: (String) -> Unit,
+    autoplayNext: Boolean,
+    onSetAutoplayNext: (Boolean) -> Unit,
+    subtitleSize: Int,
+    onSetSubtitleSize: (Int) -> Unit,
     onSearch: () -> Unit,
     onResume: (RecentSeries) -> Unit,
 ) {
@@ -597,7 +655,30 @@ private fun HomeScreen(
         if (showSettings) cacheBytes = withContext(Dispatchers.IO) { deps.cacheBytes() }
     }
 
-    val items = remember(recents, sort, titleLanguage) {
+    // Keep "new episode" markers fresh for airing shows without opening each one.
+    var lastRecentRefresh by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(refreshTick, recents.map { it.id }) {
+        val now = System.currentTimeMillis()
+        if (recents.isEmpty() || now - lastRecentRefresh < 10 * 60_000L) return@LaunchedEffect
+        lastRecentRefresh = now
+        val changed = withContext(Dispatchers.IO) {
+            var changed = false
+            for (recent in recents.take(10)) {
+                val view = runCatching { deps.core.series.load(recent.id, deps.core.ctx) }
+                    .onFailure { AppLog.w("series", "Recent metadata refresh failed for " + recent.id, it) }
+                    .getOrNull() ?: continue
+                if (view.detail.status.equals("RELEASING", ignoreCase = true)) {
+                    runCatching { deps.core.series.load(recent.id, deps.core.ctx, refresh = true) }
+                        .onFailure { AppLog.w("series", "Recent episode refresh failed for " + recent.id, it) }
+                    changed = true
+                }
+            }
+            changed
+        }
+        if (changed) localTick += 1
+    }
+
+    val items = remember(recents, sort, titleLanguage, localTick) {
         recents.map { recent ->
             val cachedView = deps.core.series.peek(recent.id)
             val detail = cachedView?.detail
@@ -752,6 +833,41 @@ private fun HomeScreen(
                     Chip("Hide adult content", selected = hideAdult) { onSetHideAdult(!hideAdult) }
                     Text(
                         "Hides adult search results and tag chips.",
+                        color = Color(0xFF9B9B96),
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    Label("PROVIDERS")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        deps.core.playback.availableProviders().forEach { (id, name) ->
+                            Chip(name, selected = id !in disabledProviders) { onToggleProvider(id) }
+                        }
+                    }
+                    Text(
+                        "Disabled providers are skipped when resolving streams.",
+                        color = Color(0xFF9B9B96),
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    Label("PLAYBACK")
+                    Chip("Autoplay next episode", selected = autoplayNext) { onSetAutoplayNext(!autoplayNext) }
+                    Text(
+                        "Starts the next episode after a short countdown when one is available.",
+                        color = Color(0xFF9B9B96),
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    Label("SUBTITLES")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("Small", "Normal", "Large").forEachIndexed { index, label ->
+                            Chip(label, selected = subtitleSize == index) { onSetSubtitleSize(index) }
+                        }
+                    }
+                    Text(
+                        "Subtitle track selection is in the player menu when the stream offers tracks.",
                         color = Color(0xFF9B9B96),
                         fontSize = 11.sp,
                         lineHeight = 15.sp,
@@ -2488,7 +2604,9 @@ private fun PlayerOverlay(
     deps: Deps,
     args: PlayerArgs,
     titleLanguage: TitleLanguage,
+    autoplayNext: Boolean,
     onClose: () -> Unit,
+    onPlayNext: (PlayerArgs) -> Unit,
 ) {
     deps.back.Back { onClose() }
     var sources by remember(args) { mutableStateOf<List<PlaySource>>(emptyList()) }
@@ -2527,6 +2645,50 @@ private fun PlayerOverlay(
         }
     ) ?: "Episode ${args.episode}"
     val headerLabel = "$headerTitle · S${args.season} E${args.episode}"
+
+    val seasons = remember(args.id, session?.ended) { deps.core.series.peek(args.id)?.seasons }
+    val nextPointer = remember(seasons, args.season, args.episode) {
+        seasons?.let { nextEpisode(it, args.season, args.episode) }
+    }
+    val nextEntry = remember(seasons, nextPointer) {
+        nextPointer?.let { pointer ->
+            seasons?.firstOrNull { it.first == pointer.season }?.second
+                ?.firstOrNull { it.number == pointer.episode }
+        }
+    }
+    val nextArgs = remember(nextPointer, nextEntry, headerTitle, headerDetail) {
+        nextPointer?.let { pointer ->
+            PlayerArgs(
+                id = args.id,
+                season = pointer.season,
+                episode = pointer.episode,
+                label = "$headerTitle · S${pointer.season} E${pointer.episode}",
+                title = headerTitle,
+                cover = headerDetail?.coverImage ?: args.cover,
+                score = args.score,
+                episodeTitle = nextEntry?.title,
+                absoluteEpisode = pointer.absolute,
+            )
+        }
+    }
+
+    var upNextSeconds by remember(args) { mutableStateOf<Int?>(null) }
+    var upNextDismissed by remember(args) { mutableStateOf(false) }
+    LaunchedEffect(session?.ended) {
+        if (session?.ended != true) {
+            upNextDismissed = false
+            upNextSeconds = null
+        }
+    }
+    LaunchedEffect(session?.ended, nextArgs, autoplayNext, upNextDismissed) {
+        if (session?.ended != true || nextArgs == null || !autoplayNext || upNextDismissed) return@LaunchedEffect
+        for (second in 5 downTo 1) {
+            upNextSeconds = second
+            delay(1_000)
+        }
+        upNextSeconds = null
+        onPlayNext(nextArgs)
+    }
 
     val toggleFullscreen = {
         fullscreen = !fullscreen
@@ -2886,6 +3048,7 @@ private fun PlayerOverlay(
                         PlayerControls(
                             session = current,
                             languages = buildLanguages(sources, index, current),
+                            subtitles = current.subtitleTracks,
                             resolutions = buildResolutionOptions(
                                 sources = sources,
                                 index = index,
@@ -2922,7 +3085,72 @@ private fun PlayerOverlay(
                                     }
                                 }
                             },
+                            onSelectSubtitle = { id -> current.selectSubtitle(id) },
                             modifier = Modifier.align(Alignment.BottomCenter),
+                        )
+                    }
+                }
+
+                val upcoming = nextArgs
+                val upNext = upNextSeconds
+                if (upcoming != null && upNext != null && !inPictureInPicture) {
+                    Row(
+                        Modifier.align(Alignment.Center)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0xE60C0C0C))
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.widthIn(max = 360.dp)) {
+                            Text(
+                                "UP NEXT · ${upNext}s",
+                                color = Color(0xFF9B9B96),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                upcoming.episodeTitle ?: "Episode ${upcoming.episode}",
+                                color = Color(0xFFF5F5F2),
+                                fontSize = 13.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                            Text(
+                                "S${upcoming.season} E${upcoming.episode}",
+                                color = Color(0xFF9B9B96),
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(16.dp))
+                        Text(
+                            "Play now",
+                            color = Color(0xFF0C0C0C),
+                            fontSize = 12.sp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color(0xFFF5F5F2))
+                                .clickable {
+                                    upNextDismissed = true
+                                    upNextSeconds = null
+                                    onPlayNext(upcoming)
+                                }
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Cancel",
+                            color = Color(0xFFC9C9C3),
+                            fontSize = 12.sp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color(0xFF151515))
+                                .clickable {
+                                    upNextDismissed = true
+                                    upNextSeconds = null
+                                }
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
                         )
                     }
                 }
@@ -2935,9 +3163,11 @@ private fun PlayerOverlay(
 private fun PlayerControls(
     session: PlayerSession,
     languages: List<PlayerLanguage>,
+    subtitles: List<PlayerSubtitleTrack>,
     resolutions: List<PlayerResolutionOption>,
     onSelectResolution: (PlayerResolutionOption) -> Unit,
     onSelectLanguage: (PlayerLanguage) -> Unit,
+    onSelectSubtitle: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var preview by remember { mutableStateOf<Float?>(null) }
@@ -2973,6 +3203,12 @@ private fun PlayerControls(
         )
         Spacer(Modifier.width(8.dp))
         AudioMenuButton(languages, onSelectLanguage)
+        Spacer(Modifier.width(8.dp))
+        SubtitleMenuButton(
+            subtitles = subtitles,
+            activeId = session.activeSubtitleId,
+            onSelect = onSelectSubtitle,
+        )
         Spacer(Modifier.width(8.dp))
         ResolutionButton(resolutions, onSelectResolution)
     }
@@ -3171,6 +3407,51 @@ private fun AudioMenuButton(languages: List<PlayerLanguage>, onSelect: (PlayerLa
                     onClick = {
                         open = false
                         onSelect(language)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitleMenuButton(
+    subtitles: List<PlayerSubtitleTrack>,
+    activeId: String?,
+    onSelect: (String) -> Unit,
+) {
+    if (subtitles.isEmpty()) return
+    var open by remember { mutableStateOf(false) }
+    val active = subtitles.firstOrNull { it.id == activeId }
+    Box {
+        PlayerIconButton(onClick = { open = true }) {
+            Text(
+                "CC",
+                color = if (active != null) Color(0xFFF5F5F2) else Color(0xFF9B9B96),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Off", color = if (active == null) Color(0xFFF5F5F2) else Color(0xFFC9C9C3), fontSize = 12.sp) },
+                onClick = {
+                    open = false
+                    onSelect("off")
+                },
+            )
+            subtitles.forEach { track ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            listOfNotNull(track.label, track.detail).joinToString(" · "),
+                            color = if (track.id == activeId) Color(0xFFF5F5F2) else Color(0xFFC9C9C3),
+                            fontSize = 12.sp,
+                        )
+                    },
+                    onClick = {
+                        open = false
+                        onSelect(track.id)
                     },
                 )
             }

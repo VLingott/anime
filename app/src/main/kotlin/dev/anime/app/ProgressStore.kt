@@ -54,6 +54,27 @@ object ProgressStore : dev.anime.ui.ProgressStore {
         prefs.edit().putBoolean("ui:hideAdult", value).apply()
     }
 
+    override fun disabledProviders(): Set<String> =
+        prefs.getString("ui:disabledProviders", null)
+            ?.split(',')?.filter { it.isNotBlank() }?.toSet()
+            .orEmpty()
+
+    override fun saveDisabledProviders(value: Set<String>) {
+        prefs.edit().putString("ui:disabledProviders", value.sorted().joinToString(",")).apply()
+    }
+
+    override fun autoplayNext(): Boolean = prefs.getBoolean("ui:autoplayNext", true)
+
+    override fun saveAutoplayNext(value: Boolean) {
+        prefs.edit().putBoolean("ui:autoplayNext", value).apply()
+    }
+
+    override fun subtitleSize(): Int = prefs.getInt("ui:subtitleSize", 1)
+
+    override fun saveSubtitleSize(value: Int) {
+        prefs.edit().putInt("ui:subtitleSize", value.coerceIn(0, 2)).apply()
+    }
+
     override fun audioPreference(id: Long): String? = prefs.getString("$id:audio", null)
 
     override fun saveAudioPreference(id: Long, label: String?) {

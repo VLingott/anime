@@ -35,6 +35,23 @@ object Progress {
 
     fun saveHideAdultContent(value: Boolean) = prefs.putBoolean("ui:hideAdult", value)
 
+    fun disabledProviders(): Set<String> =
+        prefs.get("ui:disabledProviders", null)
+            ?.split(',')?.filter { it.isNotBlank() }?.toSet()
+            .orEmpty()
+
+    fun saveDisabledProviders(value: Set<String>) {
+        prefs.put("ui:disabledProviders", value.sorted().joinToString(","))
+    }
+
+    fun autoplayNext(): Boolean = prefs.getBoolean("ui:autoplayNext", true)
+
+    fun saveAutoplayNext(value: Boolean) = prefs.putBoolean("ui:autoplayNext", value)
+
+    fun subtitleSize(): Int = prefs.getInt("ui:subtitleSize", 1)
+
+    fun saveSubtitleSize(value: Int) = prefs.putInt("ui:subtitleSize", value.coerceIn(0, 2))
+
     fun audioPreference(id: Long): String? = prefs.get("$id:audio", null)
 
     fun saveAudioPreference(id: Long, label: String?) {

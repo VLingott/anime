@@ -1,0 +1,17 @@
+{
+  "_comment": "Fallback override for the AllAnime provider's rotating constants. Mirror of the upstream (anidoku) config; update this file when AllAnime rotates so releases self-heal without an app update.",
+  "build_id": "182",
+  "api_url": "https://api.mkissa.net/api",
+  "bootstrap_url": "https://api.mkissa.net/client-crypto/v1/bootstrap",
+  "referer": "https://mkissa.to",
+  "referer_host": "mkissa.to",
+  "base_host": "allanime.day",
+  "key_group": "mkissa",
+  "episode_lane": "k7",
+  "qd_mask_hex": "3b39c164fc7fafeebc0d766575f8930b09f50354e71084906034f1947a6ad1c6",
+  "episode_query": "query($showId:String!,$translationType:VaildTranslationTypeEnumType!,$episodeString:String!){episode(showId:$showId translationType:$translationType episodeString:$episodeString){sourceUrls show{_id}}}",
+  "epoch_bucket_ms": 604800000,
+  "boot_label": "UCCk4NP:",
+  "boot_sig_template": "{referer_host}.{build_id}.{key_group}.{epoch}.{lane}",
+  "aa_req_seed_template": "{epoch}:{build_id}:{qh}:{ts}:{lane}"
+}

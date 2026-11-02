@@ -59,7 +59,7 @@ class PlaybackService(
             AniWorldProvider(cacheDir),
             ReAnimeProvider(),
             HanimeProvider(),
-            AllAnimeProvider(),
+            AllAnimeProvider(cacheDir),
         ),
     val health: ProviderHealth = ProviderHealth(),
 ) {
@@ -72,6 +72,18 @@ class PlaybackService(
     private val refreshing = ConcurrentHashMap.newKeySet<String>()
     private val locks = ConcurrentHashMap<String, Mutex>()
     private val lastResolvedAt = ConcurrentHashMap<String, Long>()
+
+    /** Provider ids turned off in Settings; skipped during resolve and probes. */
+    @Volatile private var disabledProviders: Set<String> = emptySet()
+
+    fun setDisabledProviders(ids: Set<String>) {
+        disabledProviders = ids
+    }
+
+    fun availableProviders(): List<Pair<String, String>> = providers.map { it.id to it.name }
+
+    internal fun activeProviders(): List<PlaybackProvider> =
+        providers.filter { it.id !in disabledProviders }
 
     suspend fun play(
         id: String,
@@ -157,7 +169,7 @@ class PlaybackService(
         val detail = details.byId(animeId.toString())
             ?: return PlayResponse(animeId, null, season, episode, error = "title not found")
 
-        val ordered = health.ordered(providers)
+        val ordered = health.ordered(activeProviders())
         var lastError: String? = null
         val resolved = coroutineScope {
             ordered.map { provider ->
@@ -262,7 +274,7 @@ class PlaybackService(
     suspend fun probe(animeId: Long = 154587L, season: Int = 1, episode: Int = 1) {
         val detail = details.byId(animeId.toString()) ?: return
         coroutineScope {
-            providers.map { provider ->
+            activeProviders().map { provider ->
                 async(Dispatchers.IO) {
                     val t0 = System.nanoTime()
                     val sources = runCatching { provider.resolve(detail, season, episode, ctx, null, null) }

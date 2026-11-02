@@ -12,6 +12,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.encodeToString
@@ -47,14 +48,31 @@ import dev.anime.store.obj
  * remote JSON config with baked-in fallbacks; a failed resolve refreshes the
  * config once and retries, so published rotations self-heal without an update.
  */
-class AllAnimeProvider : PlaybackProvider {
+class AllAnimeProvider(cacheDir: java.io.File? = null) : PlaybackProvider {
     override val id = "allanime"
     override val name = "AllAnime"
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val configFile = cacheDir?.let { java.io.File(it, "allanime-config.json") }
 
     @Volatile private var config: Config = Config()
     @Volatile private var configRefreshedAt = 0L
+    private val configLock = kotlinx.coroutines.sync.Mutex()
+
+    /** Consecutive failed resolves; drives exponential backoff. */
+    @Volatile private var failures = 0
+    @Volatile private var retryAt = 0L
+    @Volatile private var rateLimitedUntil = 0L
+    @Volatile private var lastApiError: String? = null
+
+    init {
+        configFile?.takeIf { it.isFile }?.let { file ->
+            runCatching {
+                val stored = json.decodeFromString<Config>(file.readText())
+                if (stored.buildId != Cfg.BUILD_ID || stored.qdMaskHex != Cfg.QD_MASK_HEX) config = stored
+            }.onFailure { AppLog.w("allanime", "Ignoring unreadable config cache", it) }
+        }
+    }
 
     @Serializable
     data class Config(
@@ -75,24 +93,33 @@ class AllAnimeProvider : PlaybackProvider {
     )
 
     private suspend fun refreshConfig(ctx: SourceContext, throttle: Boolean) {
-        val age = System.currentTimeMillis() - configRefreshedAt
-        if (age < Cfg.REMOTE_CONFIG_RETRY_MS && throttle) return
-        synchronized(this) {
-            val ageLocked = System.currentTimeMillis() - configRefreshedAt
-            if (ageLocked < Cfg.REMOTE_CONFIG_RETRY_MS && throttle) return
+        if (throttle && System.currentTimeMillis() - configRefreshedAt < Cfg.REMOTE_CONFIG_RETRY_MS) return
+        configLock.withLock {
+            val age = System.currentTimeMillis() - configRefreshedAt
+            if (throttle && age < Cfg.REMOTE_CONFIG_RETRY_MS) return@withLock
             configRefreshedAt = System.currentTimeMillis()
-        }
-        val url = System.getenv("ALLANIME_CONFIG_URL")?.takeIf { it.isNotBlank() } ?: Cfg.REMOTE_CONFIG_URL
-        val text = runCatching {
-            ctx.http.get(url) {
-                header(HttpHeaders.Accept, "application/json")
-            }.bodyAsText()
-        }.onFailure { AppLog.w("allanime", "Remote config fetch failed", it) }
-            .getOrNull() ?: return
 
-        runCatching { json.decodeFromString<Config>(text) }
-            .onSuccess { config = it }
-            .onFailure { AppLog.w("allanime", "Remote config invalid", it) }
+            val sources = System.getenv("ALLANIME_CONFIG_URL")?.takeIf { it.isNotBlank() }
+                ?.let { listOf(it) }
+                ?: Cfg.REMOTE_CONFIG_URLS
+            for (url in sources) {
+                val text = runCatching {
+                    ctx.http.get(url) {
+                        header(HttpHeaders.Accept, "application/json")
+                    }.bodyAsText()
+                }.onFailure { AppLog.w("allanime", "Remote config fetch failed: $url", it) }
+                    .getOrNull() ?: continue
+
+                val parsed = runCatching { json.decodeFromString<Config>(text) }
+                    .onFailure { AppLog.w("allanime", "Remote config invalid: $url", it) }
+                    .getOrNull() ?: continue
+
+                config = parsed
+                runCatching { configFile?.writeText(text) }
+                    .onFailure { AppLog.w("allanime", "Could not persist config", it) }
+                return@withLock
+            }
+        }
     }
 
     override suspend fun resolve(
@@ -104,17 +131,57 @@ class AllAnimeProvider : PlaybackProvider {
         episodeTitle: String?,
     ): List<PlaySource> {
         if (episode < 1) return emptyList()
+        val now = System.currentTimeMillis()
+        if (now < retryAt || now < rateLimitedUntil) return emptyList()
+
         refreshConfig(ctx, throttle = true)
 
         val episodeString = absoluteEpisode?.toString() ?: episode.toString()
         val first = episodeSources(detail, episodeString, config, ctx)
-        if (first.isNotEmpty()) return first
+        if (first.isNotEmpty()) {
+            failures = 0
+            retryAt = 0
+            lastApiError = null
+            return first
+        }
 
         // A fresh rotation surfaces as "no sources": refresh the remote config
         // (throttle-free) and try the new constants once before giving up.
         refreshConfig(ctx, throttle = false)
-        return episodeSources(detail, episodeString, config, ctx)
+        val retried = episodeSources(detail, episodeString, config, ctx)
+        if (retried.isNotEmpty()) {
+            failures = 0
+            retryAt = 0
+            lastApiError = null
+            return retried
+        }
+
+        recordFailure(now)
+        return emptyList()
     }
+
+    private fun recordFailure(now: Long) {
+        failures += 1
+        val error = lastApiError.orEmpty()
+        val rateLimited = error.contains("captcha", true) ||
+            error.contains("too many requests", true) ||
+            error.contains("rate", true)
+        if (rateLimited) {
+            // Respect the API's cooldown instead of retrying into a captcha wall.
+            rateLimitedUntil = now + (parseRetryDelay(error) ?: Cfg.RATE_LIMIT_COOLDOWN_MS)
+        }
+        retryAt = now + backoffFor(failures)
+        AppLog.w("allanime", "Resolve failed ($failures); retry in ${(retryAt - now) / 1000}s")
+    }
+
+    internal fun backoffFor(failures: Int): Long =
+        (Cfg.BACKOFF_BASE_MS shl (failures - 1).coerceIn(0, 6)).coerceAtMost(Cfg.BACKOFF_MAX_MS)
+
+    /** "please try again in 3 seconds" -> 3_000 ms (+ margin). */
+    internal fun parseRetryDelay(message: String): Long? =
+        Regex("try again in (\\d+) second", RegexOption.IGNORE_CASE)
+            .find(message)?.groupValues?.get(1)?.toLongOrNull()
+            ?.let { (it + 2) * 1_000 }
 
     private suspend fun episodeSources(
         detail: DetailResult,
@@ -217,7 +284,9 @@ class AllAnimeProvider : PlaybackProvider {
             .onFailure { AppLog.w("allanime", "Sources payload unreadable (${it::class.simpleName})") }
             .getOrNull() ?: return null
         if (parsed.errors.isNotEmpty()) {
-            AppLog.w("allanime", "Sources API errors: " + parsed.errors.joinToString { it.message ?: "?" })
+            val message = parsed.errors.joinToString { it.message ?: "?" }
+            lastApiError = message
+            AppLog.w("allanime", "Sources API errors: $message")
             return null
         }
         val episode = parsed.data?.episode ?: parsed.episode ?: return null
@@ -515,10 +584,16 @@ class AllAnimeProvider : PlaybackProvider {
     }
 
     internal object Cfg {
-        const val REMOTE_CONFIG_URL =
-            "https://raw.githubusercontent.com/serplay/anidoku/master/allanime-config.json"
+        /** Remote constant overrides: maintained upstream first, our own copy as fallback. */
+        val REMOTE_CONFIG_URLS = listOf(
+            "https://raw.githubusercontent.com/serplay/anidoku/master/allanime-config.json",
+            "https://raw.githubusercontent.com/VLingott/anime/master/allanime-config.json",
+        )
         const val REMOTE_CONFIG_RETRY_MS = 30_000L
         const val BOOT_TTL_MS = 30_000L
+        const val RATE_LIMIT_COOLDOWN_MS = 3L * 60_000
+        const val BACKOFF_BASE_MS = 30_000L
+        const val BACKOFF_MAX_MS = 10L * 60_000
 
         const val BUILD_ID = "182"
         const val API_URL = "https://api.mkissa.net/api"

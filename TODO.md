@@ -38,14 +38,16 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Android player hides system bars and the gesture handle; immersive mode restores on exit.
 - [x] Settings: manual “Check for updates” with a one-minute client gate and GitHub rate-limit reset handling.
 - [x] Settings: default title language, default audio language, adult-content filtering, cache size and clear.
-- [ ] Settings: provider toggles, update channel, sync account.
-- [ ] Subtitle track selection (including AniWorld GerSub) and subtitle styling.
-- [ ] Next episode / autoplay after end; “up next” card.
+- [x] Settings: provider toggles (per-provider enable/disable).
+- [ ] Settings: update channel, sync account.
+- [x] Subtitle track selection in the player menu, plus subtitle size presets (small/normal/large).
+- [x] Next episode / autoplay after end with a cancellable “up next” countdown card.
 - [ ] Buffering indicator and seek-preview thumbnails.
 - [x] Android PiP (automatic when leaving while playing; in-app controls hidden, system PiP controls stay).
 - [ ] Player volume/brightness gestures, playback speed, explicit PiP button.
 - [x] Recents: new-episode marker, sorting, fully-watched entries sorted last.
 - [x] Recents: long-press removal with confirmation (deletes recents + progress + audio preference).
+- [x] Recents: background refresh of airing shows so new-episode markers stay current.
 - [ ] Recents: hide without deleting, episode title in the row.
 - [x] Search: tags selectable like genres, searchable full AniList tag catalog, multi-row overlay filter dialog; chips cycle include → exclude (red) → neutral; adult tags hidden with the adult filter.
 - [x] Search: tag catalog uses a lazy grid and local overlay state, so typing in tag search does not recompose the results screen.
@@ -84,6 +86,7 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - Android releases are debug-signed; changing the keystore breaks in-place updates.
 - Provider scrapers (AniWorld/VOE/Vidmoly, Re:ANIME/FlixCloud, hanime.tv, AllAnime/mkissa) can break when sites change; parser failures are logged locally in `anime.log`.
 - hanime.tv search returns the whole catalog (~4 MB) once per 10 min per session and matches AniList hentai titles by series name; weakly related titles may not map. Only engages when the AniList entry is flagged adult.
+- Subtitle menu only lists tracks the stream manifest carries; some hosters (VOE) ship none.
 - AllAnime rotates its client crypto (build id + AES mask + header templates). Baked-in constants are latest-at-integration; when the site rotates, playback fails until the remote config (`AllAnimeProvider.Cfg.REMOTE_CONFIG_URL`) is updated — set `ALLANIME_CONFIG_URL` to point elsewhere. Known hosters for the current API are Ok.ru embeds (HLS master) and legacy `--` clock.json refs; other hosts (mp4upload/filemoon/vidnest) are deliberately not extracted yet.
 - Absolute episode mapping skips unnumbered specials, so rare special-numbering cases can still be off.
 - Current play cache is intentionally permanent; refresh happens in the background.

@@ -9,6 +9,7 @@ import android.content.res.Configuration
 import android.widget.Toast
 import android.net.Uri
 import android.util.Rational
+import android.util.TypedValue
 import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
@@ -44,6 +45,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.session.MediaSession
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import androidx.activity.compose.BackHandler
@@ -57,6 +59,7 @@ import dev.anime.cache.CacheManager
 import dev.anime.store.FileRecentsStore
 import dev.anime.util.AppLog
 import dev.anime.ui.PlayerAudioTrack
+import dev.anime.ui.PlayerSubtitleTrack
 import dev.anime.ui.PlayerResolution
 import dev.anime.ui.PlayerHost
 import dev.anime.ui.PlayerSession
@@ -324,6 +327,22 @@ internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
                     this.player = player
                     useController = false
                     setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                    subtitleView?.setStyle(
+                        CaptionStyleCompat(
+                            android.graphics.Color.WHITE,
+                            android.graphics.Color.TRANSPARENT,
+                            android.graphics.Color.TRANSPARENT,
+                            CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                            android.graphics.Color.BLACK,
+                            null,
+                        ),
+                    )
+                    val sp = when (ProgressStore.subtitleSize()) {
+                        0 -> 14f
+                        2 -> 22f
+                        else -> 18f
+                    }
+                    subtitleView?.setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
                 }
             },
             modifier = Modifier.fillMaxSize(),
@@ -344,16 +363,71 @@ private class AndroidSession(private val player: ExoPlayer) : PlayerSession {
         private set
     override var activeAudioId by mutableStateOf<String?>(null)
         private set
+    override var subtitleTracks by mutableStateOf<List<PlayerSubtitleTrack>>(emptyList())
+        private set
+    override var activeSubtitleId by mutableStateOf<String?>(null)
+        private set
+    override var ended by mutableStateOf(false)
+        private set
 
     private data class Override(val group: TrackGroup, val index: Int)
     private var overrides: Map<String, Override> = emptyMap()
+    private var subtitleOverrides: Map<String, Override> = emptyMap()
 
     fun refresh() {
         playing = player.isPlaying
         buffering = player.playbackState == Player.STATE_BUFFERING
+        ended = player.playbackState == Player.STATE_ENDED
         positionMs = player.currentPosition.coerceAtLeast(0L)
         durationMs = player.duration.coerceAtLeast(0L)
         refreshTracks()
+        refreshSubtitles()
+    }
+
+    private fun refreshSubtitles() {
+        val groups = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+        val tracks = mutableListOf<PlayerSubtitleTrack>()
+        val map = mutableMapOf<String, Override>()
+        var active: String? = null
+        groups.forEach { group ->
+            for (index in 0 until group.length) {
+                if (!group.isTrackSupported(index)) continue
+                val id = group.mediaTrackGroup.id + ":sub:" + index
+                val format = group.getTrackFormat(index)
+                val label = format.label
+                    ?: languageName(format.language)
+                    ?: "Subtitle " + (index + 1)
+                val selected = group.isTrackSelected(index)
+                if (selected) active = id
+                tracks += PlayerSubtitleTrack(
+                    id = id,
+                    label = label,
+                    detail = format.sampleMimeType?.substringAfterLast('/')?.uppercase(),
+                    selected = selected,
+                )
+                map[id] = Override(group.mediaTrackGroup, index)
+            }
+        }
+        subtitleOverrides = map
+        if (tracks != subtitleTracks) subtitleTracks = tracks
+        activeSubtitleId = active
+    }
+
+    override fun selectSubtitle(id: String) {
+        val parameters = player.trackSelectionParameters.buildUpon()
+        if (id == "off") {
+            parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            player.trackSelectionParameters = parameters.build()
+            activeSubtitleId = null
+            subtitleTracks = subtitleTracks.map { it.copy(selected = false) }
+            return
+        }
+        val target = subtitleOverrides[id] ?: return
+        parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            .setOverrideForType(TrackSelectionOverride(target.group, target.index))
+        player.trackSelectionParameters = parameters.build()
+        activeSubtitleId = id
+        subtitleTracks = subtitleTracks.map { it.copy(selected = it.id == id) }
     }
 
     private fun refreshTracks() {
