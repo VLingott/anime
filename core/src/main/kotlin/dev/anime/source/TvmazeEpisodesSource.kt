@@ -63,30 +63,32 @@ class TvmazeEpisodesSource : StreamSource {
         }
         if (perName.isEmpty()) return null
 
-        fun rank(list: List<TvmazeShow>) = list.sortedBy { s ->
-            s.year?.let { y -> if (seasonYear == null) 0 else abs(y - seasonYear) } ?: 9_999
-        }
-
-        for ((q, shows) in perName) {
-            val anime = shows.filter { it.anime }
-            if (anime.isEmpty()) continue
-            val target = norm(q)
-            val exact = anime.filter { norm(it.name) == target }
-            if (exact.isNotEmpty()) return rank(exact).first()
-
-            val contained = anime.filter {
-                val n = norm(it.name)
-                n.isNotEmpty() && target.length >= 4 && n.length >= 4 &&
-                    (n.contains(target) || target.contains(n))
+        val candidates = LinkedHashMap<String, TvmazeCandidate>()
+        for ((query, shows) in perName) {
+            for (show in shows) {
+                val score = Shows.titleScore(show.name, query)
+                if (score <= 0) continue
+                val distance = seasonYear?.let { y -> show.year?.let { abs(it - y) } }
+                val next = TvmazeCandidate(show, score, distance)
+                val previous = candidates[show.id]
+                if (previous == null || next.betterThan(previous)) candidates[show.id] = next
             }
-            rank(contained).firstOrNull()?.let { return it }
         }
+        val acceptable = candidates.values.filter { Shows.acceptable(it.score, it.yearDistance) }
+        val ordered = acceptable.sortedWith(
+            compareByDescending<TvmazeCandidate> { it.show.anime }
+                .thenByDescending { it.score }
+                .thenBy { it.yearDistance ?: Int.MAX_VALUE },
+        )
+        return ordered.firstOrNull()?.show
+    }
 
-        for ((q, shows) in perName) {
-            val target = norm(q)
-            shows.firstOrNull { norm(it.name) == target && target.isNotEmpty() }?.let { return it }
-        }
-        return null
+    private fun TvmazeCandidate.betterThan(other: TvmazeCandidate): Boolean {
+        if (score != other.score) return score > other.score
+        val mine = yearDistance ?: Int.MAX_VALUE
+        val theirs = other.yearDistance ?: Int.MAX_VALUE
+        if (mine != theirs) return mine < theirs
+        return show.anime && !other.show.anime
     }
 
     private suspend fun searchShows(query: String, ctx: SourceContext): List<TvmazeShow> {
@@ -132,7 +134,48 @@ class TvmazeEpisodesSource : StreamSource {
         }.onFailure { AppLog.w("tvmaze", "Episode fetch failed for show $showId", it) }
             .getOrDefault(emptyList())
 
-    private fun norm(s: String): String = s.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()
+}
+
+/** One TVmaze search candidate with its match evidence. */
+private class TvmazeCandidate(
+    val show: TvmazeShow,
+    val score: Int,
+    val yearDistance: Int?,
+)
+
+/**
+ * Title matching for TVmaze show candidates.
+ *
+ * Containment alone is not proof: an AniList OVA/side-story title such as
+ * "Elfen Lied: Tooriame nite …" contains the TV series name but is a different
+ * work. Weak (prefix/containment) matches therefore only count when the
+ * premiere year is exactly right; strong matches must be equal after
+ * normalisation, with or without season markers.
+ */
+internal object Shows {
+    private val nonWord = Regex("[^a-z0-9]+")
+
+    fun normalize(s: String): String = s.lowercase().replace(nonWord, " ").trim()
+
+    /** 4 exact, 3 equal after dropping season markers, 1 one name is a prefix of the other, 0 otherwise. */
+    fun titleScore(candidate: String, wanted: String): Int {
+        val a = normalize(candidate)
+        val b = normalize(wanted)
+        if (a.isEmpty() || b.isEmpty()) return 0
+        if (a == b) return 4
+        val strippedA = normalize(dev.anime.util.stripSeasonMarkers(candidate))
+        val strippedB = normalize(dev.anime.util.stripSeasonMarkers(wanted))
+        if (strippedA.isNotEmpty() && strippedA == strippedB) return 3
+        if (a.length < 4 || b.length < 4) return 0
+        return if (a.startsWith("$b ") || b.startsWith("$a ")) 1 else 0
+    }
+
+    /** Weak matches need a year-exact corroboration; strong ones stand alone. */
+    fun acceptable(score: Int, yearDistance: Int?): Boolean = when {
+        score >= 3 -> true
+        score == 1 -> yearDistance == 0
+        else -> false
+    }
 }
 
 data class TvmazeShow(

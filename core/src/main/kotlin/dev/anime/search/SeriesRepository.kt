@@ -74,9 +74,11 @@ class SeriesRepository(
                     .groupBy { it.season }
                     .toSortedMap()
                     .map { (season, list) -> season to list.sortedBy { it.number } }
-                selectSeasons(detail, grouped).ifEmpty {
-                    val count = detail.episodes ?: 0
-                    if (count > 0) listOf(1 to (1..count).map { n -> TvmazeEpisode(season = 1, number = n) }) else emptyList()
+                val selected = selectSeasons(detail, grouped)
+                if (acceptsEpisodes(detail, selected)) {
+                    selected
+                } else {
+                    syntheticSeasons(detail)
                 }
             } else emptyList()
 
@@ -160,5 +162,46 @@ class SeriesRepository(
             }
         }
         return bytes
+    }
+
+    internal companion object {
+        /** Formats where TVmaze's parent-series episode list must never be borrowed. */
+        val NON_EPISODIC_FORMATS = setOf("OVA", "ONA", "SPECIAL", "MUSIC")
+
+    /**
+     * Decide whether a TVmaze episode selection can stand in for this AniList entry.
+     *
+     * Tvmaze search can return the parent TV series for an OVA/side story
+     * ("Elfen Lied: Tooriame nite …" contains "Elfen Lied"), so a selection that
+     * cannot match the AniList episode count for a non-episodic format, or that
+     * is implausibly larger than it, is rejected and rendered synthetically.
+     */
+    internal fun acceptsEpisodes(
+        detail: DetailResult,
+        selected: List<Pair<Int, List<TvmazeEpisode>>>,
+    ): Boolean {
+        if (selected.isEmpty()) return false
+        val format = detail.format?.uppercase()
+        val want = detail.episodes
+        if (want == null) {
+            // No count to check against: never borrow a TV show for OVAs/specials.
+            return format !in NON_EPISODIC_FORMATS
+        }
+        if (want <= 0) return false
+        val got = selected.sumOf { it.second.size }
+        if (got <= 0) return false
+        return if (format in NON_EPISODIC_FORMATS) {
+            got == want
+        } else {
+            got <= want * 2 + 1
+        }
+    }
+
+    /** Single pseudo-season matching AniList's own episode count. */
+    internal fun syntheticSeasons(detail: DetailResult): List<Pair<Int, List<TvmazeEpisode>>> {
+        val count = detail.episodes ?: 0
+        if (count <= 0) return emptyList()
+        return listOf(1 to (1..count).map { n -> TvmazeEpisode(season = 1, number = n) })
+    }
     }
 }
