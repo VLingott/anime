@@ -321,7 +321,7 @@ internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
             } else {
                 val subSources = subtitles.mapIndexed { index, track ->
                     val configuration = MediaItem.SubtitleConfiguration.Builder(Uri.parse(AppCore.proxied(track.url)))
-                        .setMimeType(subtitleMimeType(track.url))
+                        .setMimeType(track.mime ?: subtitleMimeType(track.url))
                         .apply {
                             track.label?.let { setLabel(it) }
                             track.language?.let { setLanguage(it) }

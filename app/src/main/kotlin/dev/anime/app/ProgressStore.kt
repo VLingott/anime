@@ -69,6 +69,18 @@ object ProgressStore : dev.anime.ui.ProgressStore {
         prefs.edit().putBoolean("ui:autoplayNext", value).apply()
     }
 
+    override fun onlineSubtitles(): Boolean = prefs.getBoolean("ui:onlineSubtitles", true)
+
+    override fun saveOnlineSubtitles(value: Boolean) {
+        prefs.edit().putBoolean("ui:onlineSubtitles", value).apply()
+    }
+
+    override fun subtitleLanguage(): String = prefs.getString("ui:subtitleLanguage", "English") ?: "English"
+
+    override fun saveSubtitleLanguage(value: String) {
+        prefs.edit().putString("ui:subtitleLanguage", value).apply()
+    }
+
     override fun subtitleSize(): Int = prefs.getInt("ui:subtitleSize", 1)
 
     override fun saveSubtitleSize(value: Int) {

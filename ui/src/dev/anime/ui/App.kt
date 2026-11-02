@@ -155,6 +155,7 @@ class CoreHandles(
     cacheDir: java.io.File? = null,
 ) {
     val series: SeriesRepository = SeriesRepository(details, tvmaze, cacheDir)
+    val subtitles: dev.anime.source.SubtitleService = dev.anime.source.SubtitleService(cacheDir)
 }
 
 data class PlayerResolution(
@@ -299,6 +300,10 @@ interface ProgressStore {
     fun saveAutoplayNext(value: Boolean) {}
     fun subtitleSize(): Int = 1
     fun saveSubtitleSize(value: Int) {}
+    fun onlineSubtitles(): Boolean = true
+    fun saveOnlineSubtitles(value: Boolean) {}
+    fun subtitleLanguage(): String = "English"
+    fun saveSubtitleLanguage(value: String) {}
     fun removeSeries(id: Long) {}
 }
 
@@ -495,6 +500,8 @@ fun App(deps: Deps) {
     var disabledProviders by remember { mutableStateOf(deps.progress.disabledProviders()) }
     var autoplayNext by remember { mutableStateOf(deps.progress.autoplayNext()) }
     var subtitleSize by remember { mutableStateOf(deps.progress.subtitleSize()) }
+    var onlineSubtitles by remember { mutableStateOf(deps.progress.onlineSubtitles()) }
+    var subtitleLanguage by remember { mutableStateOf(deps.progress.subtitleLanguage()) }
 
     LaunchedEffect(Unit) {
         deps.core.playback.setDisabledProviders(disabledProviders)
@@ -519,6 +526,8 @@ fun App(deps: Deps) {
                     args = currentPlayer,
                     titleLanguage = titleLanguage,
                     autoplayNext = autoplayNext,
+                    onlineSubtitles = onlineSubtitles,
+                    subtitleLanguage = subtitleLanguage,
                     onClose = { player = null; refreshTick++ },
                     onPlayNext = { next -> player = next },
                 )
@@ -598,6 +607,16 @@ fun App(deps: Deps) {
                         subtitleSize = value
                         deps.progress.saveSubtitleSize(value)
                     },
+                    onlineSubtitles = onlineSubtitles,
+                    onSetOnlineSubtitles = { value ->
+                        onlineSubtitles = value
+                        deps.progress.saveOnlineSubtitles(value)
+                    },
+                    subtitleLanguage = subtitleLanguage,
+                    onSetSubtitleLanguage = { value ->
+                        subtitleLanguage = value
+                        deps.progress.saveSubtitleLanguage(value)
+                    },
                     onSearch = { searchMode = true },
                     onResume = { recent ->
                         val displayTitle = recentTitle(
@@ -654,6 +673,10 @@ private fun HomeScreen(
     onSetAutoplayNext: (Boolean) -> Unit,
     subtitleSize: Int,
     onSetSubtitleSize: (Int) -> Unit,
+    onlineSubtitles: Boolean,
+    onSetOnlineSubtitles: (Boolean) -> Unit,
+    subtitleLanguage: String,
+    onSetSubtitleLanguage: (String) -> Unit,
     onSearch: () -> Unit,
     onResume: (RecentSeries) -> Unit,
 ) {
@@ -889,8 +912,16 @@ private fun HomeScreen(
                             Chip(label, selected = subtitleSize == index) { onSetSubtitleSize(index) }
                         }
                     }
+                    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Chip("Download subtitles", selected = onlineSubtitles) { onSetOnlineSubtitles(!onlineSubtitles) }
+                    }
+                    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("English", "German", "Japanese").forEach { language ->
+                            Chip(language, selected = subtitleLanguage == language) { onSetSubtitleLanguage(language) }
+                        }
+                    }
                     Text(
-                        "Subtitle track selection is in the player menu when the stream offers tracks.",
+                        "Online fetches (OpenSubtitles) only run when the stream ships no subtitle track.",
                         color = Color(0xFF9B9B96),
                         fontSize = 11.sp,
                         lineHeight = 15.sp,
@@ -2641,6 +2672,8 @@ private fun PlayerOverlay(
     args: PlayerArgs,
     titleLanguage: TitleLanguage,
     autoplayNext: Boolean,
+    onlineSubtitles: Boolean,
+    subtitleLanguage: String,
     onClose: () -> Unit,
     onPlayNext: (PlayerArgs) -> Unit,
 ) {
@@ -2709,6 +2742,7 @@ private fun PlayerOverlay(
         }
     }
 
+    var onlineTracks by remember(args) { mutableStateOf<List<SubtitleTrack>>(emptyList()) }
     var upNextSeconds by remember(args) { mutableStateOf<Int?>(null) }
     var upNextDismissed by remember(args) { mutableStateOf(false) }
     LaunchedEffect(session?.ended) {
@@ -2916,6 +2950,27 @@ private fun PlayerOverlay(
             },
     ) {
         val source = sources.getOrNull(index)
+        LaunchedEffect(source?.url, onlineSubtitles, subtitleLanguage) {
+            val currentSource = source ?: return@LaunchedEffect
+            onlineTracks = emptyList()
+            if (!onlineSubtitles || currentSource.subtitles.isNotEmpty()) return@LaunchedEffect
+            val detail = headerDetail ?: withContext(Dispatchers.IO) {
+                runCatching { deps.core.details.byId(args.id.toString()) }.getOrNull()
+            } ?: return@LaunchedEffect
+            onlineTracks = withContext(Dispatchers.IO) {
+                runCatching {
+                    deps.core.subtitles.forEpisode(
+                        detail = detail,
+                        season = args.season,
+                        episode = args.episode,
+                        language = subtitleLanguage,
+                        ctx = deps.core.ctx,
+                    )
+                }.onFailure { AppLog.w("subtitles", "Online subtitle fetch failed", it) }
+                    .getOrDefault(emptyList())
+            }
+        }
+
         if (failed) {
             Column(
                 Modifier.align(Alignment.Center).padding(24.dp),
@@ -2994,7 +3049,7 @@ private fun PlayerOverlay(
             ) {
                 deps.player.Video(
                     url = source.url,
-                    subtitles = source.subtitles,
+                    subtitles = source.subtitles.ifEmpty { onlineTracks },
                     resumeMs = resumeFrom,
                     onProgress = { pos, dur ->
                         deps.progress.save(args.id, args.season, args.episode, pos, dur)

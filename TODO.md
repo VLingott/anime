@@ -40,7 +40,7 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Settings: default title language, default audio language, adult-content filtering, cache size and clear.
 - [x] Settings: provider toggles (per-provider enable/disable).
 - [ ] Settings: update channel, sync account.
-- [x] Subtitle track selection in the player menu, plus subtitle size presets (small/normal/large).
+- [x] Subtitle track selection in the player menu, subtitle size presets (small/normal/large), and an online fallback (OpenSubtitles v3, language English/German/Japanese).
 - [x] Next episode / autoplay after end with a cancellable “up next” countdown card.
 - [ ] Buffering indicator and seek-preview thumbnails.
 - [x] Android PiP (automatic when leaving while playing; in-app controls hidden, system PiP controls stay).
@@ -86,7 +86,7 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - Android releases are debug-signed; changing the keystore breaks in-place updates.
 - Provider scrapers (AniWorld/VOE/Vidmoly, Re:ANIME/FlixCloud, hanime.tv, AllAnime/mkissa) can break when sites change; parser failures are logged locally in `anime.log`.
 - hanime.tv search returns the whole catalog (~4 MB) once per 10 min per session and matches AniList hentai titles by series name; weakly related titles may not map. Only engages when the AniList entry is flagged adult.
-- Subtitle menu only lists tracks the stream manifest carries; some hosters (VOE) ship none.
+- Subtitle menu lists stream tracks first; when none exist the app tries OpenSubtitles (coverage depends on that database — e.g. the Saga of Tanya the Evil movie only has JP/other subs there). Some hosters (VOE) ship no tracks at all.
 - AllAnime rotates its client crypto (build id + AES mask + header templates). Baked-in constants are latest-at-integration; when the site rotates, playback fails until the remote config (`AllAnimeProvider.Cfg.REMOTE_CONFIG_URL`) is updated — set `ALLANIME_CONFIG_URL` to point elsewhere. Known hosters for the current API are Ok.ru embeds (HLS master) and legacy `--` clock.json refs; other hosts (mp4upload/filemoon/vidnest) are deliberately not extracted yet.
 - Absolute episode mapping skips unnumbered specials, so rare special-numbering cases can still be off.
 - Current play cache is intentionally permanent; refresh happens in the background.

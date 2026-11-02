@@ -48,6 +48,14 @@ object Progress {
 
     fun saveAutoplayNext(value: Boolean) = prefs.putBoolean("ui:autoplayNext", value)
 
+    fun onlineSubtitles(): Boolean = prefs.getBoolean("ui:onlineSubtitles", true)
+
+    fun saveOnlineSubtitles(value: Boolean) = prefs.putBoolean("ui:onlineSubtitles", value)
+
+    fun subtitleLanguage(): String = prefs.get("ui:subtitleLanguage", "English") ?: "English"
+
+    fun saveSubtitleLanguage(value: String) = prefs.put("ui:subtitleLanguage", value)
+
     fun subtitleSize(): Int = prefs.getInt("ui:subtitleSize", 1)
 
     fun saveSubtitleSize(value: Int) = prefs.putInt("ui:subtitleSize", value.coerceIn(0, 2))

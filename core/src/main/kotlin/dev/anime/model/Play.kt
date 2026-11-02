@@ -8,6 +8,8 @@ data class SubtitleTrack(
     val label: String? = null,
     val language: String? = null,
     val default: Boolean = false,
+    /** Overrides extension-based detection (online subtitle files have no extension). */
+    val mime: String? = null,
 )
 
 @Serializable
