@@ -33,7 +33,7 @@ class SeriesRepository(
     cacheDir: File? = null,
 ) {
     private val cache = ByteLruCache<Long, SeriesView>(32L * 1024 * 1024, ::weight)
-    private val disk = cacheDir?.let { DiskCache(File(it, "series-v5"), 32L * 1024 * 1024) }
+    private val disk = cacheDir?.let { DiskCache(File(it, "series-v6"), 32L * 1024 * 1024) }
     private val json = Json { ignoreUnknownKeys = true }
     private val locks = java.util.concurrent.ConcurrentHashMap<Long, Mutex>()
 
@@ -74,7 +74,7 @@ class SeriesRepository(
                     .groupBy { it.season }
                     .toSortedMap()
                     .map { (season, list) -> season to list.sortedBy { it.number } }
-                val selected = selectSeasons(detail, grouped)
+                val selected = capToAired(detail, selectSeasons(detail, grouped))
                 if (acceptsEpisodes(detail, selected)) {
                     selected
                 } else {
@@ -106,7 +106,7 @@ class SeriesRepository(
             return grouped
         }
 
-        val target = detail.episodes ?: return grouped
+        val target = detail.expectedEpisodes() ?: return grouped
         if (target <= 0) return grouped
 
         fun seasonYear(episodes: List<TvmazeEpisode>): Int? = episodes
@@ -165,6 +165,13 @@ class SeriesRepository(
     }
 
     internal companion object {
+        /**
+         * The episode count the UI should expose: already-aired episodes for a
+         * releasing show, AniList's planned count otherwise.
+         */
+        internal fun DetailResult.expectedEpisodes(): Int? =
+            episodesAired?.takeIf { it > 0 } ?: episodes
+
         /** Formats where TVmaze's parent-series episode list must never be borrowed. */
         val NON_EPISODIC_FORMATS = setOf("OVA", "ONA", "SPECIAL", "MUSIC")
 
@@ -182,7 +189,7 @@ class SeriesRepository(
     ): Boolean {
         if (selected.isEmpty()) return false
         val format = detail.format?.uppercase()
-        val want = detail.episodes
+        val want = detail.expectedEpisodes()
         if (want == null) {
             // No count to check against: never borrow a TV show for OVAs/specials.
             return format !in NON_EPISODIC_FORMATS
@@ -199,9 +206,29 @@ class SeriesRepository(
 
     /** Single pseudo-season matching AniList's own episode count. */
     internal fun syntheticSeasons(detail: DetailResult): List<Pair<Int, List<TvmazeEpisode>>> {
-        val count = detail.episodes ?: 0
+        val count = detail.expectedEpisodes() ?: 0
         if (count <= 0) return emptyList()
         return listOf(1 to (1..count).map { n -> TvmazeEpisode(season = 1, number = n) })
+    }
+
+    /**
+     * Drop TVmaze entries past the aired count. Schedules sometimes list the next
+     * (unaired) episode, which must not show up in the episode list.
+     */
+    internal fun capToAired(
+        detail: DetailResult,
+        seasons: List<Pair<Int, List<TvmazeEpisode>>>,
+    ): List<Pair<Int, List<TvmazeEpisode>>> {
+        val aired = detail.episodesAired?.takeIf { it > 0 } ?: return seasons
+        var remaining = aired
+        val capped = mutableListOf<Pair<Int, List<TvmazeEpisode>>>()
+        for ((season, episodes) in seasons) {
+            if (remaining <= 0) break
+            val take = episodes.take(remaining)
+            if (take.isNotEmpty()) capped += season to take
+            remaining -= take.size
+        }
+        return capped
     }
     }
 }

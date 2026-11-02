@@ -5,7 +5,7 @@ import java.io.File
 object CacheManager {
     private const val SCHEMA = 2
     private val directories = listOf(
-        "search", "tags-v1", "tags-v2", "series-v5", "play-v6", "resolutions", "capabilities-v1", "aniworld-structure", "play", "series",
+        "search", "tags-v1", "tags-v2", "series-v5", "series-v6", "play-v6", "resolutions", "capabilities-v1", "aniworld-structure", "play", "series",
         "series-v2", "series-v3", "series-v4", "play-v2", "play-v3", "play-v4", "play-v5",
     )
 

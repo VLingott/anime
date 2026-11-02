@@ -18,6 +18,16 @@ import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import java.util.Collections
 
+/**
+ * Aired episode count for a releasing show: AniList's `nextAiringEpisode.episode`
+ * is the *next* one, so already aired = episode - 1. Null means "use `episodes`".
+ */
+internal fun airedEpisodeCount(status: String?, nextAiringEpisode: Int?): Int? {
+    if (!status.equals("RELEASING", ignoreCase = true)) return null
+    val aired = (nextAiringEpisode ?: return null) - 1
+    return aired.takeIf { it >= 1 }
+}
+
 class Details(private val ctx: SourceContext) {
     private val hot = Collections.synchronizedMap(
         object : LinkedHashMap<String, DetailResult>(128, 0.75f, true) {
@@ -33,6 +43,7 @@ class Details(private val ctx: SourceContext) {
             query (${'$'}id: Int) { Media(id: ${'$'}id, type: ANIME) {
               id isAdult title { romaji english native } synonyms description(asHtml: false)
               genres tags { name rank } format status season seasonYear episodes duration
+              nextAiringEpisode { episode }
               averageScore popularity source startDate { year month day } endDate { year month day }
               coverImage { extraLarge large color } bannerImage
               studios(isMain: true) { nodes { name } }
@@ -75,6 +86,10 @@ class Details(private val ctx: SourceContext) {
                 season = media["season"]?.str(),
                 seasonYear = media["seasonYear"]?.int(),
                 episodes = media["episodes"]?.int(),
+                episodesAired = airedEpisodeCount(
+                    status = media["status"]?.str(),
+                    nextAiringEpisode = media["nextAiringEpisode"]?.obj()?.get("episode")?.int(),
+                ),
                 duration = media["duration"]?.int(),
                 source = media["source"]?.str(),
                 averageScore = media["averageScore"]?.dbl(),

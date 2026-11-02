@@ -40,6 +40,8 @@ data class DetailResult(
     val season: String? = null,
     val seasonYear: Int? = null,
     val episodes: Int? = null,
+    /** Episodes already aired for a releasing show (AniList nextAiringEpisode - 1). */
+    val episodesAired: Int? = null,
     val duration: Int? = null,
     val source: String? = null,
     val averageScore: Double? = null,
