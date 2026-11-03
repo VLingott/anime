@@ -2757,6 +2757,7 @@ private fun PlayerOverlay(
     var subtitleLang by remember { mutableStateOf(deps.progress.subtitleLanguage()) }
     var subtitleFetching by remember(args) { mutableStateOf(false) }
     var activeExternalUrl by remember(args) { mutableStateOf<String?>(null) }
+    var preferExternal by remember(args) { mutableStateOf(false) }
     var cues by remember(args) { mutableStateOf<List<dev.anime.model.SubtitleCue>>(emptyList()) }
     var upNextSeconds by remember(args) { mutableStateOf<Int?>(null) }
     var upNextDismissed by remember(args) { mutableStateOf(false) }
@@ -3003,15 +3004,18 @@ private fun PlayerOverlay(
                 active.selectSubtitle(active.subtitleTracks.first().id)
             }
         }
-        LaunchedEffect(externalTracks, subtitlesOn, session?.subtitleTracks) {
+        LaunchedEffect(externalTracks, subtitlesOn, session?.subtitleTracks, preferExternal) {
             val native = session?.subtitleTracks.orEmpty()
-            if (!subtitlesOn || native.isNotEmpty()) {
-                if (!subtitlesOn) cues = emptyList()
+            if (!subtitlesOn) {
+                cues = emptyList()
                 return@LaunchedEffect
             }
+            val externalAllowed = native.isEmpty() || preferExternal
+            if (!externalAllowed) return@LaunchedEffect
             if (activeExternalUrl == null && externalTracks.isNotEmpty()) {
                 val pick = externalTracks.firstOrNull { it.default } ?: externalTracks.first()
                 activeExternalUrl = pick.url
+                if (preferExternal && native.isNotEmpty()) session?.selectSubtitle("off")
             }
         }
         LaunchedEffect(activeExternalUrl, subtitlesOn) {
@@ -3025,6 +3029,7 @@ private fun PlayerOverlay(
                     .onFailure { AppLog.w("subtitles", "Subtitle file parse failed", it) }
                     .getOrDefault(emptyList())
             }
+            AppLog.i("subtitles", "External cues loaded: " + cues.size + " from " + url.take(80))
         }
 
         if (failed) {
@@ -3226,12 +3231,17 @@ private fun PlayerOverlay(
                             subtitleLanguage = subtitleLang,
                             onSelectSubtitleLanguage = { language ->
                                 subtitleLang = language
+                                preferExternal = true
                                 activeExternalUrl = null
                                 cues = emptyList()
+                                subtitlesOn = true
+                                deps.progress.saveSubtitlesEnabled(args.id, true)
                                 deps.progress.saveSubtitleLanguage(language)
                             },
                             subtitlesMissing = subtitlesOn && !subtitleFetching &&
                                 current.subtitleTracks.isEmpty() && externalTracks.isEmpty(),
+                            externalActive = activeExternalUrl != null,
+                            externalCueCount = cues.size,
                             resolutions = buildResolutionOptions(
                                 sources = sources,
                                 index = index,
@@ -3270,14 +3280,17 @@ private fun PlayerOverlay(
                             },
                             onSelectSubtitle = { id ->
                                 if (id.startsWith("ext:")) {
+                                    preferExternal = true
                                     activeExternalUrl = id.removePrefix("ext:")
                                     cues = emptyList()
                                     current.selectSubtitle("off")
                                 } else if (id == "off") {
+                                    preferExternal = false
                                     activeExternalUrl = null
                                     cues = emptyList()
                                     current.selectSubtitle("off")
                                 } else {
+                                    preferExternal = false
                                     activeExternalUrl = null
                                     cues = emptyList()
                                     current.selectSubtitle(id)
@@ -3411,6 +3424,8 @@ private fun PlayerControls(
     subtitleLanguage: String,
     onSelectSubtitleLanguage: (String) -> Unit,
     subtitlesMissing: Boolean,
+    externalActive: Boolean,
+    externalCueCount: Int,
     resolutions: List<PlayerResolutionOption>,
     onSelectResolution: (PlayerResolutionOption) -> Unit,
     onSelectLanguage: (PlayerLanguage) -> Unit,
@@ -3457,6 +3472,8 @@ private fun PlayerControls(
             enabled = subtitlesOn,
             language = subtitleLanguage,
             missing = subtitlesMissing,
+            externalActive = externalActive,
+            externalCueCount = externalCueCount,
             onToggleEnabled = onToggleSubtitles,
             onSelectLanguage = onSelectSubtitleLanguage,
             onSelect = onSelectSubtitle,
@@ -3673,6 +3690,8 @@ private fun SubtitleMenuButton(
     enabled: Boolean,
     language: String,
     missing: Boolean,
+    externalActive: Boolean,
+    externalCueCount: Int,
     onToggleEnabled: () -> Unit,
     onSelectLanguage: (String) -> Unit,
     onSelect: (String) -> Unit,
@@ -3754,6 +3773,19 @@ private fun SubtitleMenuButton(
                             Text(
                                 if (missing) "No " + language + " subtitles found for this episode."
                                 else "Looking for subtitles…",
+                                color = Color(0xFF9B9B96),
+                                fontSize = 11.sp,
+                            )
+                        },
+                        onClick = {},
+                        enabled = false,
+                    )
+                } else if (externalActive) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (externalCueCount > 0) "Loaded " + externalCueCount + " cues"
+                                else "Downloading subtitle…",
                                 color = Color(0xFF9B9B96),
                                 fontSize = 11.sp,
                             )
