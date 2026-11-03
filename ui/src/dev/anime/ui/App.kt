@@ -145,6 +145,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class CoreHandles(
     val ctx: dev.anime.source.SourceContext,
@@ -2750,6 +2751,7 @@ private fun PlayerOverlay(
     }
     var subtitleLang by remember { mutableStateOf(deps.progress.subtitleLanguage()) }
     var subtitleFetching by remember(args) { mutableStateOf(false) }
+    var subtitlesPrepared by remember(args) { mutableStateOf(false) }
     var upNextSeconds by remember(args) { mutableStateOf<Int?>(null) }
     var upNextDismissed by remember(args) { mutableStateOf(false) }
     LaunchedEffect(session?.ended) {
@@ -2962,25 +2964,31 @@ private fun PlayerOverlay(
             onlineTracks = emptyList()
             if (!onlineSubtitles || !subtitlesOn || currentSource.subtitles.isNotEmpty()) {
                 subtitleFetching = false
+                subtitlesPrepared = true
                 return@LaunchedEffect
             }
             subtitleFetching = true
             val detail = headerDetail ?: withContext(Dispatchers.IO) {
                 runCatching { deps.core.details.byId(args.id.toString()) }.getOrNull()
-            } ?: return@LaunchedEffect
-            onlineTracks = withContext(Dispatchers.IO) {
-                runCatching {
-                    deps.core.subtitles.forEpisode(
-                        detail = detail,
-                        season = args.season,
-                        episode = args.episode,
-                        language = subtitleLang,
-                        ctx = deps.core.ctx,
-                    )
-                }.onFailure { AppLog.w("subtitles", "Online subtitle fetch failed", it) }
-                    .getOrDefault(emptyList())
+            }
+            if (detail != null) {
+                onlineTracks = withTimeoutOrNull(8_000) {
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            deps.core.subtitles.forEpisode(
+                                detail = detail,
+                                season = args.season,
+                                episode = args.episode,
+                                language = subtitleLang,
+                                ctx = deps.core.ctx,
+                            )
+                        }.onFailure { AppLog.w("subtitles", "Online subtitle fetch failed", it) }
+                            .getOrDefault(emptyList())
+                    }
+                } ?: emptyList()
             }
             subtitleFetching = false
+            subtitlesPrepared = true
         }
 
         LaunchedEffect(subtitlesOn, session?.subtitleTracks, onlineTracks) {
@@ -3027,13 +3035,17 @@ private fun PlayerOverlay(
                         .padding(horizontal = 18.dp, vertical = 9.dp),
                 )
             }
-        } else if (source == null) {
+        } else if (source == null || !subtitlesPrepared) {
             Column(
                 Modifier.align(Alignment.Center).padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    if (resolving) "Finding a source…" else "Starting stream…",
+                    when {
+                        resolving -> "Finding a source…"
+                        subtitleFetching -> "Preparing subtitles…"
+                        else -> "Starting stream…"
+                    },
                     color = Color(0xFF9B9B96),
                     fontSize = 13.sp,
                 )
@@ -3184,6 +3196,7 @@ private fun PlayerOverlay(
                             },
                             subtitleLanguage = subtitleLang,
                             onSelectSubtitleLanguage = { language ->
+                                resumeFrom = session?.positionMs?.takeIf { it > 0 } ?: resumeFrom
                                 subtitleLang = language
                                 deps.progress.saveSubtitleLanguage(language)
                             },

@@ -38,6 +38,8 @@ class HlsProxy(
     private val gate = Semaphore(8)
     private val inFlight = ConcurrentHashMap<String, CompletableDeferred<File?>>()
     private val targets = ConcurrentHashMap<String, String>()
+    /** Subtitle rendition playlists, which may lack an .m3u8 suffix. */
+    private val forcedPlaylists: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     @Volatile private var total = 0L
     @Volatile private var entries = 0
@@ -81,7 +83,7 @@ class HlsProxy(
 
     suspend fun handleFile(rawUrl: String): Result? {
         val url = resolveTarget(rawUrl) ?: return null
-        if (isPlaylistPath(url)) {
+        if (isPlaylistPath(url) || url in forcedPlaylists) {
             return handle(url)
         }
         val file = cachedFile(url) ?: return null
@@ -92,7 +94,7 @@ class HlsProxy(
     suspend fun handle(rawUrl: String): Result? {
         val url = resolveTarget(rawUrl) ?: return null
 
-        if (isPlaylistPath(url)) {
+        if (isPlaylistPath(url) || url in forcedPlaylists) {
             val text = withTimeoutOrNull(20_000) {
                 ctx.http.get(url) {
                     header(HttpHeaders.UserAgent, UA)
@@ -163,8 +165,15 @@ class HlsProxy(
         return text.lineSequence().joinToString("\n") { line ->
             val t = line.trim()
             when {
-                t.startsWith("#EXT-X-KEY") || t.startsWith("#EXT-X-MEDIA") || t.startsWith("#EXT-X-MAP") ->
-                    uriAttr.replace(line) { m -> "URI=\"" + proxyPath(resolve(base, m.groupValues[1])) + "\"" }
+                t.startsWith("#EXT-X-KEY") || t.startsWith("#EXT-X-MEDIA") || t.startsWith("#EXT-X-MAP") -> {
+                    val subtitleRendition = t.startsWith("#EXT-X-MEDIA") &&
+                        t.contains("TYPE=SUBTITLES", ignoreCase = true)
+                    uriAttr.replace(line) { m ->
+                        val abs = resolve(base, m.groupValues[1])
+                        if (subtitleRendition) forcedPlaylists.add(abs)
+                        "URI=\"" + proxyPath(abs) + "\""
+                    }
+                }
                 t.isEmpty() || t.startsWith("#") -> line
                 else -> proxyPath(resolve(base, t))
             }

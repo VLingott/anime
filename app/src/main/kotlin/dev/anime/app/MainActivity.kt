@@ -468,16 +468,17 @@ private class AndroidSession(private val player: ExoPlayer) : PlayerSession {
                 return
             }
             val target = subtitleOverrides[id] ?: return
-            val live = player.currentTracks.groups.any { group ->
-                group.mediaTrackGroup.id == target.group.id && target.index < group.length
+            val liveGroup = player.currentTracks.groups.firstOrNull { group ->
+                group.type == C.TRACK_TYPE_TEXT &&
+                    group.mediaTrackGroup.id == target.group.id && target.index < group.length
             }
-            if (!live) {
+            if (liveGroup == null) {
                 refreshSubtitles()
                 return
             }
             subtitlesUserDisabled = false
             parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                .setOverrideForType(TrackSelectionOverride(target.group, target.index))
+                .setOverrideForType(TrackSelectionOverride(liveGroup.mediaTrackGroup, target.index))
             player.trackSelectionParameters = parameters.build()
             activeSubtitleId = id
             subtitleTracks = subtitleTracks.map { it.copy(selected = it.id == id) }
