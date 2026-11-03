@@ -45,6 +45,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.common.MimeTypes
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.session.MediaSession
@@ -319,8 +320,13 @@ internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
             val media = if (subtitles.isEmpty()) {
                 primary
             } else {
+                // Subtitles are plain files fetched directly; a subtitle failure
+                // must never take the video stream down with it.
+                val subtitleDataSource = DefaultHttpDataSource.Factory()
+                    .setUserAgent(USER_AGENT)
+                    .setAllowCrossProtocolRedirects(true)
                 val subSources = subtitles.mapIndexed { index, track ->
-                    val configuration = MediaItem.SubtitleConfiguration.Builder(Uri.parse(AppCore.proxied(track.url)))
+                    val configuration = MediaItem.SubtitleConfiguration.Builder(Uri.parse(track.url))
                         .setMimeType(track.mime ?: subtitleMimeType(track.url))
                         .apply {
                             track.label?.let { setLabel(it) }
@@ -328,7 +334,8 @@ internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
                             if (track.default || index == 0) setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
                         }
                         .build()
-                    SingleSampleMediaSource.Factory(HlsDataSourceFactory(AppCore.hls))
+                    SingleSampleMediaSource.Factory(subtitleDataSource)
+                        .setTreatLoadErrorsAsEndOfStream(true)
                         .createMediaSource(configuration, C.TIME_UNSET)
                 }
                 MergingMediaSource(primary, *subSources.toTypedArray())
@@ -445,30 +452,36 @@ private class AndroidSession(private val player: ExoPlayer) : PlayerSession {
         if (tracks != subtitleTracks) subtitleTracks = tracks
         activeSubtitleId = active
 
-        // Show the first available track by default; respect an explicit "Off".
-        if (active == null && tracks.isNotEmpty() && !subtitlesUserDisabled && !subtitlesAutoSelected) {
-            subtitlesAutoSelected = true
-            selectSubtitle(tracks.first().id)
-        }
     }
 
     override fun selectSubtitle(id: String) {
-        val parameters = player.trackSelectionParameters.buildUpon()
-        if (id == "off") {
-            subtitlesUserDisabled = true
-            parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).clearOverridesOfType(C.TRACK_TYPE_TEXT)
+        // Track snapshots can go stale between rebuilds; never let a bad one
+        // interrupt playback.
+        runCatching {
+            val parameters = player.trackSelectionParameters.buildUpon()
+            if (id == "off") {
+                subtitlesUserDisabled = true
+                parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                player.trackSelectionParameters = parameters.build()
+                activeSubtitleId = null
+                subtitleTracks = subtitleTracks.map { it.copy(selected = false) }
+                return
+            }
+            val target = subtitleOverrides[id] ?: return
+            val live = player.currentTracks.groups.any { group ->
+                group.mediaTrackGroup.id == target.group.id && target.index < group.length
+            }
+            if (!live) {
+                refreshSubtitles()
+                return
+            }
+            subtitlesUserDisabled = false
+            parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                .setOverrideForType(TrackSelectionOverride(target.group, target.index))
             player.trackSelectionParameters = parameters.build()
-            activeSubtitleId = null
-            subtitleTracks = subtitleTracks.map { it.copy(selected = false) }
-            return
-        }
-        val target = subtitleOverrides[id] ?: return
-        subtitlesUserDisabled = false
-        parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-            .setOverrideForType(TrackSelectionOverride(target.group, target.index))
-        player.trackSelectionParameters = parameters.build()
-        activeSubtitleId = id
-        subtitleTracks = subtitleTracks.map { it.copy(selected = it.id == id) }
+            activeSubtitleId = id
+            subtitleTracks = subtitleTracks.map { it.copy(selected = it.id == id) }
+        }.onFailure { AppLog.w("player", "Subtitle track selection failed", it) }
     }
 
     private fun refreshTracks() {
@@ -571,6 +584,8 @@ private fun parseResolutions(text: String): List<PlayerResolution> {
 }
 
 private const val UPDATE_REPO = "VLingott/anime"
+private const val USER_AGENT =
+    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
 
 internal class AndroidUpdateChecker(
     private val activity: MainActivity,
