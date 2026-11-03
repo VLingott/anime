@@ -43,11 +43,7 @@ import androidx.media3.common.TrackGroup
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.common.MimeTypes
 import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.source.MergingMediaSource
-import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
@@ -237,7 +233,6 @@ internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
     @Composable
     override fun Video(
         url: String,
-        subtitles: List<SubtitleTrack>,
         resumeMs: Long,
         onProgress: (Long, Long) -> Unit,
         onError: (String?) -> Unit,
@@ -313,33 +308,10 @@ internal class AndroidPlayerHost(private val activity: Activity) : PlayerHost {
             }
         }
 
-        LaunchedEffect(url, subtitles) {
+        LaunchedEffect(url) {
             val previous = if (player.mediaItemCount > 0) player.currentPosition else resumeMs
-            val primary = HlsMediaSource.Factory(HlsDataSourceFactory(AppCore.hls))
+            val media = HlsMediaSource.Factory(HlsDataSourceFactory(AppCore.hls))
                 .createMediaSource(MediaItem.fromUri(url))
-            val media = if (subtitles.isEmpty()) {
-                primary
-            } else {
-                // Subtitles are plain files fetched directly; a subtitle failure
-                // must never take the video stream down with it.
-                val subtitleDataSource = DefaultHttpDataSource.Factory()
-                    .setUserAgent(USER_AGENT)
-                    .setAllowCrossProtocolRedirects(true)
-                val subSources = subtitles.mapIndexed { index, track ->
-                    val configuration = MediaItem.SubtitleConfiguration.Builder(Uri.parse(track.url))
-                        .setMimeType(track.mime ?: subtitleMimeType(track.url))
-                        .apply {
-                            track.label?.let { setLabel(it) }
-                            track.language?.let { setLanguage(it) }
-                            if (track.default || index == 0) setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                        }
-                        .build()
-                    SingleSampleMediaSource.Factory(subtitleDataSource)
-                        .setTreatLoadErrorsAsEndOfStream(true)
-                        .createMediaSource(configuration, C.TIME_UNSET)
-                }
-                MergingMediaSource(primary, *subSources.toTypedArray())
-            }
             player.setMediaSource(media)
             player.prepare()
             if (previous > 0) player.seekTo(previous)
@@ -555,15 +527,6 @@ private class AndroidSession(private val player: ExoPlayer) : PlayerSession {
     }
 }
 
-private fun subtitleMimeType(url: String): String {
-    val path = url.substringBefore('?').substringBefore('#')
-    return when {
-        path.endsWith(".srt", ignoreCase = true) -> MimeTypes.APPLICATION_SUBRIP
-        path.endsWith(".ssa", ignoreCase = true) || path.endsWith(".ass", ignoreCase = true) -> MimeTypes.TEXT_SSA
-        else -> MimeTypes.TEXT_VTT
-    }
-}
-
 private fun parseResolutions(text: String): List<PlayerResolution> {
     if (!text.contains("#EXT-X-STREAM-INF")) return emptyList()
     val found = LinkedHashMap<String, String>()
@@ -585,8 +548,6 @@ private fun parseResolutions(text: String): List<PlayerResolution> {
 }
 
 private const val UPDATE_REPO = "VLingott/anime"
-private const val USER_AGENT =
-    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
 
 internal class AndroidUpdateChecker(
     private val activity: MainActivity,

@@ -217,7 +217,6 @@ private class DesktopPlayerHost(
     @Composable
     override fun Video(
         url: String,
-        subtitles: List<SubtitleTrack>,
         resumeMs: Long,
         onProgress: (Long, Long) -> Unit,
         onError: (String?) -> Unit,
@@ -244,7 +243,6 @@ private class DesktopPlayerHost(
             runCatching {
                 MpvEngine(
                     url = url,
-                    subtitles = subtitles,
                     startMs = resumeMs,
                     widgetWidth = w,
                     widgetHeight = h,

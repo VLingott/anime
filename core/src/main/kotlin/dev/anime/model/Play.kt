@@ -25,6 +25,13 @@ data class PlaySource(
 )
 
 @Serializable
+data class SubtitleCue(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String,
+)
+
+@Serializable
 data class StreamResolution(
     val id: String,
     val label: String,

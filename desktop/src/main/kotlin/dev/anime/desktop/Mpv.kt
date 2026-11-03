@@ -12,7 +12,6 @@ import com.sun.jna.ptr.PointerByReference
 import dev.anime.ui.PlayerAudioTrack
 import dev.anime.util.AppLog
 import dev.anime.ui.PlayerResolution
-import dev.anime.model.SubtitleTrack
 import dev.anime.ui.PlayerSession
 import dev.anime.ui.PlayerSubtitleTrack
 import kotlinx.serialization.json.Json
@@ -87,7 +86,6 @@ private const val PARAM_SW_POINTER = 20
 
 internal class MpvEngine(
     private val url: String,
-    private val subtitles: List<SubtitleTrack>,
     startMs: Long,
     private val widgetWidth: Int,
     private val widgetHeight: Int,
@@ -136,7 +134,6 @@ internal class MpvEngine(
     private val lock = Object()
     private var pendingFrame = false
     @Volatile private var pendingSeekMs = 0L
-    private var subtitlesAttached = false
     private val startSeconds = (startMs / 1000.0).coerceAtLeast(0.0)
 
     private val recentFrames = ArrayDeque<Image>()
@@ -340,17 +337,6 @@ internal class MpvEngine(
                             pendingSeekMs = 0
                             command("seek", (target / 1000.0).toString(), "absolute")
                         }
-                        if (!subtitlesAttached && subtitles.isNotEmpty()) {
-                            subtitlesAttached = true
-                            subtitles.forEachIndexed { index, track ->
-                                command(
-                                    "sub-add",
-                                    track.url,
-                                    if (index == 0) "select" else "auto",
-                                    track.label ?: "Subtitle " + (index + 1),
-                                )
-                            }
-                        }
                     }
                 }
 
@@ -488,7 +474,6 @@ internal class MpvEngine(
             lib.mpv_set_property_string(handle, "hls-bitrate", if (id == "auto") "max" else id)
         }
         pendingSeekMs = positionMs
-        subtitlesAttached = false
         activeResolutionId = id
         resolutions = resolutions.map { it.copy(selected = it.id == id) }
         ended = false

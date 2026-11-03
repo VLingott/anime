@@ -224,7 +224,6 @@ interface PlayerHost {
     @Composable
     fun Video(
         url: String,
-        subtitles: List<SubtitleTrack> = emptyList(),
         resumeMs: Long,
         onProgress: (positionMs: Long, durationMs: Long) -> Unit,
         onError: (reason: String?) -> Unit,
@@ -531,6 +530,7 @@ fun App(deps: Deps) {
                     autoplayNext = autoplayNext,
                     onlineSubtitles = onlineSubtitles,
                     subtitleLanguage = subtitleLanguage,
+                    subtitleSize = subtitleSize,
                     onClose = { player = null; refreshTick++ },
                     onPlayNext = { next -> player = next },
                 )
@@ -2677,6 +2677,7 @@ private fun PlayerOverlay(
     autoplayNext: Boolean,
     onlineSubtitles: Boolean,
     subtitleLanguage: String,
+    subtitleSize: Int,
     onClose: () -> Unit,
     onPlayNext: (PlayerArgs) -> Unit,
 ) {
@@ -2718,6 +2719,7 @@ private fun PlayerOverlay(
         }
     ) ?: "Episode ${args.episode}"
     val headerLabel = "$headerTitle · S${args.season} E${args.episode}"
+    val source = sources.getOrNull(index)
 
     val seasons = remember(args.id, session?.ended) { deps.core.series.peek(args.id)?.seasons }
     val nextPointer = remember(seasons, args.season, args.episode) {
@@ -2746,12 +2748,16 @@ private fun PlayerOverlay(
     }
 
     var onlineTracks by remember(args) { mutableStateOf<List<SubtitleTrack>>(emptyList()) }
+    val externalTracks = remember(source?.url, source?.subtitles, onlineTracks) {
+        ((source?.subtitles ?: emptyList()) + onlineTracks).distinctBy { it.url }
+    }
     var subtitlesOn by remember(args.id) {
         mutableStateOf(deps.progress.subtitlesEnabled(args.id) ?: true)
     }
     var subtitleLang by remember { mutableStateOf(deps.progress.subtitleLanguage()) }
     var subtitleFetching by remember(args) { mutableStateOf(false) }
-    var subtitlesPrepared by remember(args) { mutableStateOf(false) }
+    var activeExternalUrl by remember(args) { mutableStateOf<String?>(null) }
+    var cues by remember(args) { mutableStateOf<List<dev.anime.model.SubtitleCue>>(emptyList()) }
     var upNextSeconds by remember(args) { mutableStateOf<Int?>(null) }
     var upNextDismissed by remember(args) { mutableStateOf(false) }
     LaunchedEffect(session?.ended) {
@@ -2958,13 +2964,11 @@ private fun PlayerOverlay(
                 }
             },
     ) {
-        val source = sources.getOrNull(index)
         LaunchedEffect(source?.url, onlineSubtitles, subtitleLang, subtitlesOn) {
             val currentSource = source ?: return@LaunchedEffect
             onlineTracks = emptyList()
             if (!onlineSubtitles || !subtitlesOn || currentSource.subtitles.isNotEmpty()) {
                 subtitleFetching = false
-                subtitlesPrepared = true
                 return@LaunchedEffect
             }
             subtitleFetching = true
@@ -2988,15 +2992,38 @@ private fun PlayerOverlay(
                 } ?: emptyList()
             }
             subtitleFetching = false
-            subtitlesPrepared = true
         }
 
-        LaunchedEffect(subtitlesOn, session?.subtitleTracks, onlineTracks) {
+        // Native (manifest) tracks win; otherwise use the external overlay.
+        LaunchedEffect(subtitlesOn, session?.subtitleTracks) {
             val active = session ?: return@LaunchedEffect
             if (!subtitlesOn) {
                 if (active.activeSubtitleId != null) active.selectSubtitle("off")
             } else if (active.activeSubtitleId == null && active.subtitleTracks.isNotEmpty()) {
                 active.selectSubtitle(active.subtitleTracks.first().id)
+            }
+        }
+        LaunchedEffect(externalTracks, subtitlesOn, session?.subtitleTracks) {
+            val native = session?.subtitleTracks.orEmpty()
+            if (!subtitlesOn || native.isNotEmpty()) {
+                if (!subtitlesOn) cues = emptyList()
+                return@LaunchedEffect
+            }
+            if (activeExternalUrl == null && externalTracks.isNotEmpty()) {
+                val pick = externalTracks.firstOrNull { it.default } ?: externalTracks.first()
+                activeExternalUrl = pick.url
+            }
+        }
+        LaunchedEffect(activeExternalUrl, subtitlesOn) {
+            val url = activeExternalUrl
+            if (!subtitlesOn || url == null) {
+                cues = emptyList()
+                return@LaunchedEffect
+            }
+            cues = withContext(Dispatchers.IO) {
+                runCatching { deps.core.subtitles.fetchCues(url, deps.core.ctx) }
+                    .onFailure { AppLog.w("subtitles", "Subtitle file parse failed", it) }
+                    .getOrDefault(emptyList())
             }
         }
 
@@ -3035,17 +3062,13 @@ private fun PlayerOverlay(
                         .padding(horizontal = 18.dp, vertical = 9.dp),
                 )
             }
-        } else if (source == null || !subtitlesPrepared) {
+        } else if (source == null) {
             Column(
                 Modifier.align(Alignment.Center).padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    when {
-                        resolving -> "Finding a source…"
-                        subtitleFetching -> "Preparing subtitles…"
-                        else -> "Starting stream…"
-                    },
+                    if (resolving) "Finding a source…" else "Starting stream…",
                     color = Color(0xFF9B9B96),
                     fontSize = 13.sp,
                 )
@@ -3082,7 +3105,6 @@ private fun PlayerOverlay(
             ) {
                 deps.player.Video(
                     url = source.url,
-                    subtitles = source.subtitles.ifEmpty { onlineTracks },
                     resumeMs = resumeFrom,
                     onProgress = { pos, dur ->
                         deps.progress.save(args.id, args.season, args.episode, pos, dur)
@@ -3188,7 +3210,14 @@ private fun PlayerOverlay(
                         PlayerControls(
                             session = current,
                             languages = buildLanguages(sources, index, current),
-                            subtitles = current.subtitleTracks,
+                            subtitles = current.subtitleTracks + externalTracks.mapIndexed { i, track ->
+                                PlayerSubtitleTrack(
+                                    id = "ext:" + track.url,
+                                    label = track.label ?: track.language ?: "Subtitle " + (i + 1),
+                                    detail = track.language,
+                                    selected = track.url == activeExternalUrl,
+                                )
+                            },
                             subtitlesOn = subtitlesOn,
                             onToggleSubtitles = {
                                 subtitlesOn = !subtitlesOn
@@ -3196,12 +3225,13 @@ private fun PlayerOverlay(
                             },
                             subtitleLanguage = subtitleLang,
                             onSelectSubtitleLanguage = { language ->
-                                resumeFrom = session?.positionMs?.takeIf { it > 0 } ?: resumeFrom
                                 subtitleLang = language
+                                activeExternalUrl = null
+                                cues = emptyList()
                                 deps.progress.saveSubtitleLanguage(language)
                             },
                             subtitlesMissing = subtitlesOn && !subtitleFetching &&
-                                source.subtitles.isEmpty() && onlineTracks.isEmpty(),
+                                current.subtitleTracks.isEmpty() && externalTracks.isEmpty(),
                             resolutions = buildResolutionOptions(
                                 sources = sources,
                                 index = index,
@@ -3238,10 +3268,53 @@ private fun PlayerOverlay(
                                     }
                                 }
                             },
-                            onSelectSubtitle = { id -> current.selectSubtitle(id) },
+                            onSelectSubtitle = { id ->
+                                if (id.startsWith("ext:")) {
+                                    activeExternalUrl = id.removePrefix("ext:")
+                                    cues = emptyList()
+                                    current.selectSubtitle("off")
+                                } else if (id == "off") {
+                                    activeExternalUrl = null
+                                    cues = emptyList()
+                                    current.selectSubtitle("off")
+                                } else {
+                                    activeExternalUrl = null
+                                    cues = emptyList()
+                                    current.selectSubtitle(id)
+                                }
+                            },
                             modifier = Modifier.align(Alignment.BottomCenter),
                         )
                     }
+                }
+
+                val caption = if (subtitlesOn) {
+                    val position = session?.positionMs ?: 0L
+                    cues.firstOrNull { position >= it.startMs && position < it.endMs }?.text
+                } else null
+                if (caption != null && !inPictureInPicture) {
+                    Text(
+                        caption,
+                        color = Color.White,
+                        fontSize = when (subtitleSize) {
+                            0 -> 13.sp
+                            2 -> 20.sp
+                            else -> 16.sp
+                        },
+                        lineHeight = when (subtitleSize) {
+                            0 -> 17.sp
+                            2 -> 25.sp
+                            else -> 21.sp
+                        },
+                        textAlign = TextAlign.Center,
+                        style = androidx.compose.ui.text.TextStyle(
+                            shadow = Shadow(Color.Black, Offset(0f, 1.5f), blurRadius = 6f),
+                        ),
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp)
+                            .padding(bottom = 96.dp),
+                    )
                 }
 
                 val upcoming = nextArgs

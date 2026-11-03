@@ -100,6 +100,30 @@ class SubtitleService(cacheDir: File? = null) {
         return tracks
     }
 
+    /** Download and parse a subtitle file for overlay rendering. */
+    suspend fun fetchCues(url: String, ctx: SourceContext, refresh: Boolean = false): List<dev.anime.model.SubtitleCue> {
+        val cacheKey = "cue|" + url
+        if (!refresh) {
+            disk?.read(cacheKey)?.let { text ->
+                runCatching { json.decodeFromString<List<dev.anime.model.SubtitleCue>>(text) }
+                    .getOrNull()?.takeIf { it.isNotEmpty() }?.let { return it }
+            }
+        }
+        val text = runCatching {
+            ctx.http.get(url) {
+                header(HttpHeaders.UserAgent, UA)
+                header(HttpHeaders.Accept, "*/*")
+            }.bodyAsText()
+        }.onFailure { AppLog.w("subtitles", "Subtitle file download failed", it) }
+            .getOrNull() ?: return emptyList()
+
+        val cues = SubtitleParser.parse(text)
+        if (cues.isNotEmpty()) {
+            runCatching { disk?.write(cacheKey, json.encodeToString(cues)) }
+        }
+        return cues
+    }
+
     /** IMDb id for the AniList entry, resolved once through the suggestion API. */
     private suspend fun imdbId(detail: DetailResult, ctx: SourceContext): String? = imdbLock.withLock {
         val cacheKey = "imdb|" + detail.id
@@ -196,5 +220,51 @@ class SubtitleService(cacheDir: File? = null) {
             "nld", "dut" -> "Dutch"
             else -> code ?: "Subtitle"
         }
+    }
+}
+
+/** SRT/WebVTT parsing for overlay rendering. */
+object SubtitleParser {
+    private val time = Regex("""(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})""")
+    private val tag = Regex("<[^>]+>")
+    private val assTag = Regex("""\{\\[^}]*}""")
+
+    fun parse(text: String): List<dev.anime.model.SubtitleCue> {
+        val blocks = text.replace("\r\n", "\n").replace('\r', '\n')
+            .split(Regex("\n\\s*\n"))
+        val cues = ArrayList<dev.anime.model.SubtitleCue>(blocks.size)
+        for (block in blocks) {
+            val lines = block.lines().map { it.trim() }.filter { it.isNotEmpty() }
+            val timeIndex = lines.indexOfFirst { it.contains("-->") }
+            if (timeIndex < 0) continue
+            val range = lines[timeIndex].split("-->", limit = 2)
+            val start = parseTime(range.getOrNull(0)) ?: continue
+            val end = parseTime(range.getOrNull(1)) ?: continue
+            if (end <= start) continue
+            val body = lines.drop(timeIndex + 1)
+                .joinToString("\n")
+                .let { tag.replace(it, "") }
+                .let { assTag.replace(it, "") }
+                .replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .trim()
+            if (body.isEmpty()) continue
+            cues += dev.anime.model.SubtitleCue(start, end, body.take(600))
+            if (cues.size >= 8_000) break
+        }
+        return cues
+    }
+
+    private fun parseTime(raw: String?): Long? {
+        val value = raw?.trim()?.substringBefore(' ')?.trim() ?: return null
+        val m = time.find(value) ?: return null
+        val hours = m.groupValues[1].toLongOrNull() ?: 0L
+        val minutes = m.groupValues[2].toLongOrNull() ?: return null
+        val seconds = m.groupValues[3].toLongOrNull() ?: return null
+        val millis = m.groupValues[4].padEnd(3, '0').take(3).toLongOrNull() ?: 0L
+        return ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis
     }
 }
