@@ -52,6 +52,11 @@ object Progress {
 
     fun saveOnlineSubtitles(value: Boolean) = prefs.putBoolean("ui:onlineSubtitles", value)
 
+    fun subtitlesEnabled(id: Long): Boolean? =
+        prefs.get("subs:enabled:$id", null)?.toBooleanStrictOrNull()
+
+    fun saveSubtitlesEnabled(id: Long, value: Boolean) = prefs.put("subs:enabled:$id", value.toString())
+
     fun subtitleLanguage(): String = prefs.get("ui:subtitleLanguage", "English") ?: "English"
 
     fun saveSubtitleLanguage(value: String) = prefs.put("ui:subtitleLanguage", value)

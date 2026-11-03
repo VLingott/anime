@@ -304,6 +304,8 @@ interface ProgressStore {
     fun saveOnlineSubtitles(value: Boolean) {}
     fun subtitleLanguage(): String = "English"
     fun saveSubtitleLanguage(value: String) {}
+    fun subtitlesEnabled(id: Long): Boolean? = null
+    fun saveSubtitlesEnabled(id: Long, value: Boolean) {}
     fun removeSeries(id: Long) {}
 }
 
@@ -2743,6 +2745,11 @@ private fun PlayerOverlay(
     }
 
     var onlineTracks by remember(args) { mutableStateOf<List<SubtitleTrack>>(emptyList()) }
+    var subtitlesOn by remember(args.id) {
+        mutableStateOf(deps.progress.subtitlesEnabled(args.id) ?: true)
+    }
+    var subtitleLang by remember { mutableStateOf(deps.progress.subtitleLanguage()) }
+    var subtitleFetching by remember(args) { mutableStateOf(false) }
     var upNextSeconds by remember(args) { mutableStateOf<Int?>(null) }
     var upNextDismissed by remember(args) { mutableStateOf(false) }
     LaunchedEffect(session?.ended) {
@@ -2950,10 +2957,14 @@ private fun PlayerOverlay(
             },
     ) {
         val source = sources.getOrNull(index)
-        LaunchedEffect(source?.url, onlineSubtitles, subtitleLanguage) {
+        LaunchedEffect(source?.url, onlineSubtitles, subtitleLang, subtitlesOn) {
             val currentSource = source ?: return@LaunchedEffect
             onlineTracks = emptyList()
-            if (!onlineSubtitles || currentSource.subtitles.isNotEmpty()) return@LaunchedEffect
+            if (!onlineSubtitles || !subtitlesOn || currentSource.subtitles.isNotEmpty()) {
+                subtitleFetching = false
+                return@LaunchedEffect
+            }
+            subtitleFetching = true
             val detail = headerDetail ?: withContext(Dispatchers.IO) {
                 runCatching { deps.core.details.byId(args.id.toString()) }.getOrNull()
             } ?: return@LaunchedEffect
@@ -2963,11 +2974,21 @@ private fun PlayerOverlay(
                         detail = detail,
                         season = args.season,
                         episode = args.episode,
-                        language = subtitleLanguage,
+                        language = subtitleLang,
                         ctx = deps.core.ctx,
                     )
                 }.onFailure { AppLog.w("subtitles", "Online subtitle fetch failed", it) }
                     .getOrDefault(emptyList())
+            }
+            subtitleFetching = false
+        }
+
+        LaunchedEffect(subtitlesOn, session?.subtitleTracks, onlineTracks) {
+            val active = session ?: return@LaunchedEffect
+            if (!subtitlesOn) {
+                if (active.activeSubtitleId != null) active.selectSubtitle("off")
+            } else if (active.activeSubtitleId == null && active.subtitleTracks.isNotEmpty()) {
+                active.selectSubtitle(active.subtitleTracks.first().id)
             }
         }
 
@@ -3156,6 +3177,18 @@ private fun PlayerOverlay(
                             session = current,
                             languages = buildLanguages(sources, index, current),
                             subtitles = current.subtitleTracks,
+                            subtitlesOn = subtitlesOn,
+                            onToggleSubtitles = {
+                                subtitlesOn = !subtitlesOn
+                                deps.progress.saveSubtitlesEnabled(args.id, subtitlesOn)
+                            },
+                            subtitleLanguage = subtitleLang,
+                            onSelectSubtitleLanguage = { language ->
+                                subtitleLang = language
+                                deps.progress.saveSubtitleLanguage(language)
+                            },
+                            subtitlesMissing = subtitlesOn && !subtitleFetching &&
+                                source.subtitles.isEmpty() && onlineTracks.isEmpty(),
                             resolutions = buildResolutionOptions(
                                 sources = sources,
                                 index = index,
@@ -3287,6 +3320,11 @@ private fun PlayerControls(
     session: PlayerSession,
     languages: List<PlayerLanguage>,
     subtitles: List<PlayerSubtitleTrack>,
+    subtitlesOn: Boolean,
+    onToggleSubtitles: () -> Unit,
+    subtitleLanguage: String,
+    onSelectSubtitleLanguage: (String) -> Unit,
+    subtitlesMissing: Boolean,
     resolutions: List<PlayerResolutionOption>,
     onSelectResolution: (PlayerResolutionOption) -> Unit,
     onSelectLanguage: (PlayerLanguage) -> Unit,
@@ -3330,6 +3368,11 @@ private fun PlayerControls(
         SubtitleMenuButton(
             subtitles = subtitles,
             activeId = session.activeSubtitleId,
+            enabled = subtitlesOn,
+            language = subtitleLanguage,
+            missing = subtitlesMissing,
+            onToggleEnabled = onToggleSubtitles,
+            onSelectLanguage = onSelectSubtitleLanguage,
             onSelect = onSelectSubtitle,
         )
         Spacer(Modifier.width(8.dp))
@@ -3541,42 +3584,98 @@ private fun AudioMenuButton(languages: List<PlayerLanguage>, onSelect: (PlayerLa
 private fun SubtitleMenuButton(
     subtitles: List<PlayerSubtitleTrack>,
     activeId: String?,
+    enabled: Boolean,
+    language: String,
+    missing: Boolean,
+    onToggleEnabled: () -> Unit,
+    onSelectLanguage: (String) -> Unit,
     onSelect: (String) -> Unit,
 ) {
-    if (subtitles.isEmpty()) return
     var open by remember { mutableStateOf(false) }
     val active = subtitles.firstOrNull { it.id == activeId }
     Box {
         PlayerIconButton(onClick = { open = true }) {
             Text(
                 "CC",
-                color = if (active != null) Color(0xFFF5F5F2) else Color(0xFF9B9B96),
+                color = when {
+                    !enabled -> Color(0xFF6F6F6F)
+                    active != null -> Color(0xFFF5F5F2)
+                    else -> Color(0xFF9B9B96)
+                },
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
             )
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
-                text = { Text("Off", color = if (active == null) Color(0xFFF5F5F2) else Color(0xFFC9C9C3), fontSize = 12.sp) },
+                text = {
+                    Text(
+                        if (enabled) "Subtitles: On" else "Subtitles: Off",
+                        color = Color(0xFFF5F5F2),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                },
                 onClick = {
-                    open = false
-                    onSelect("off")
+                    onToggleEnabled()
                 },
             )
-            subtitles.forEach { track ->
+            DropdownMenuItem(
+                text = { Text("Language: " + language, color = Color(0xFF9B9B96), fontSize = 11.sp) },
+                onClick = {},
+                enabled = false,
+            )
+            listOf("English", "German", "Japanese").forEach { option ->
                 DropdownMenuItem(
                     text = {
                         Text(
-                            listOfNotNull(track.label, track.detail).joinToString(" · "),
-                            color = if (track.id == activeId) Color(0xFFF5F5F2) else Color(0xFFC9C9C3),
+                            option,
+                            color = if (option == language) Color(0xFFF5F5F2) else Color(0xFFC9C9C3),
                             fontSize = 12.sp,
                         )
                     },
                     onClick = {
-                        open = false
-                        onSelect(track.id)
+                        onSelectLanguage(option)
                     },
                 )
+            }
+            if (enabled) {
+                DropdownMenuItem(
+                    text = { Text("Off", color = if (active == null) Color(0xFFF5F5F2) else Color(0xFFC9C9C3), fontSize = 12.sp) },
+                    onClick = {
+                        open = false
+                        onSelect("off")
+                    },
+                )
+                subtitles.forEach { track ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                listOfNotNull(track.label, track.detail).joinToString(" · "),
+                                color = if (track.id == activeId) Color(0xFFF5F5F2) else Color(0xFFC9C9C3),
+                                fontSize = 12.sp,
+                            )
+                        },
+                        onClick = {
+                            open = false
+                            onSelect(track.id)
+                        },
+                    )
+                }
+                if (subtitles.isEmpty()) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (missing) "No " + language + " subtitles found for this episode."
+                                else "Looking for subtitles…",
+                                color = Color(0xFF9B9B96),
+                                fontSize = 11.sp,
+                            )
+                        },
+                        onClick = {},
+                        enabled = false,
+                    )
+                }
             }
         }
     }

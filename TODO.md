@@ -40,7 +40,7 @@ Priority order. P0 blocks reliability or can lose user data; P1 is expected prod
 - [x] Settings: default title language, default audio language, adult-content filtering, cache size and clear.
 - [x] Settings: provider toggles (per-provider enable/disable).
 - [ ] Settings: update channel, sync account.
-- [x] Subtitle track selection in the player menu, subtitle size presets (small/normal/large), and an online fallback (OpenSubtitles v3, language English/German/Japanese).
+- [x] Subtitle track selection, per-series on/off switch and language picker in the player CC menu, size presets, and an online fallback (OpenSubtitles v3).
 - [x] Next episode / autoplay after end with a cancellable “up next” countdown card.
 - [ ] Buffering indicator and seek-preview thumbnails.
 - [x] Android PiP (automatic when leaving while playing; in-app controls hidden, system PiP controls stay).

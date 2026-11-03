@@ -75,6 +75,13 @@ object ProgressStore : dev.anime.ui.ProgressStore {
         prefs.edit().putBoolean("ui:onlineSubtitles", value).apply()
     }
 
+    override fun subtitlesEnabled(id: Long): Boolean? =
+        if (prefs.contains("subs:enabled:$id")) prefs.getBoolean("subs:enabled:$id", true) else null
+
+    override fun saveSubtitlesEnabled(id: Long, value: Boolean) {
+        prefs.edit().putBoolean("subs:enabled:$id", value).apply()
+    }
+
     override fun subtitleLanguage(): String = prefs.getString("ui:subtitleLanguage", "English") ?: "English"
 
     override fun saveSubtitleLanguage(value: String) {
